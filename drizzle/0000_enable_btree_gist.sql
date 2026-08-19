@@ -1,0 +1,12 @@
+-- btree_gist lets a GiST index hold plain scalar types (uuid, enum) alongside
+-- the range types GiST already understands.
+--
+-- The next migration needs exactly that, because the no-overlap rule mixes an
+-- equality test on a uuid with an overlap test on a range:
+--
+--   EXCLUDE USING gist (staff_id WITH =, slot WITH &&)
+--
+-- Without this extension, `staff_id WITH =` has no GiST operator class and the
+-- constraint cannot be created. It is enabled here, in its own migration, so
+-- it is guaranteed present before anything depends on it.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
