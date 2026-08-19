@@ -1,0 +1,272 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* next-themes drives the class on <html>. */
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+   Daybook — raw token values.
+   This block is the source of truth for colour in the whole application: every
+   value is an OKLCH conversion of one of the palette's hexes, and no colour
+   exists anywhere that is not listed here.
+--------------------------------------------------------------------------- */
+:root {
+  /* Surfaces */
+  --canvas:        oklch(0.9465 0.0058 84.57);  /* #EFEDE9 warm grey */
+  --surface:       oklch(1 0 0);                /* #FFFFFF */
+  --surface-sunk:  oklch(0.9137 0.0075 80.72);  /* #E5E2DD */
+
+  /* Hairlines */
+  --line:          oklch(0.8776 0.0093 78.28);  /* #DAD6D0 */
+  --line-strong:   oklch(0.8064 0.0124 79.78);  /* #C4BFB7 */
+
+  /* Ink */
+  --ink:           oklch(0.2202 0.0041 128.67); /* #1A1B19 */
+  --ink-muted:     oklch(0.4892 0.0082 124.59); /* #5F615C */
+  --ink-faint:     oklch(0.6523 0.0094 128.62); /* #8E918B */
+
+  /* The single accent: verdigris. Open time, primary buttons, focus, selection. */
+  --accent:          oklch(0.4583 0.0751 183.71);       /* #14655C */
+  --accent-wash:     oklch(0.4583 0.0751 183.71 / 0.1); /* rgba(20,101,92,.10) */
+  --accent-contrast: oklch(1 0 0);                      /* #FFFFFF */
+
+  /* System states — admin chrome only (badges, toasts). Never on the ribbon. */
+  --confirmed:     oklch(0.5314 0.0946 161.86); /* #2E7D5B */
+  --pending:       oklch(0.5608 0.1122 75.82);  /* #9A6A12 */
+  --cancelled:     oklch(0.5381 0.1454 28.09);  /* #B3453B */
+
+  /* Radius — soft controls, hard time. */
+  --radius-pill:    999px; /* buttons, chips, inputs */
+  --radius-card:    10px;  /* cards, panels */
+  --radius-dialog:  14px;  /* dialogs, sheets */
+  --radius-segment: 2px;   /* ribbon segments */
+
+  /* Depth — exactly two shadow tokens. Everything else is a 1px hairline. */
+  --shadow-float: 0 12px 32px -14px oklch(0.2202 0.0041 128.67 / 0.28),
+                  0 2px 8px -4px oklch(0.2202 0.0041 128.67 / 0.14);
+  --shadow-inset: inset 0 1px 2px 0 oklch(0.2202 0.0041 128.67 / 0.16);
+}
+
+.dark {
+  --canvas:        oklch(0.2059 0.0059 285.87); /* #17171A */
+  --surface:       oklch(0.2395 0.0059 271.17); /* #1E1F22 */
+  --surface-sunk:  oklch(0.191 0.0043 264.47);  /* #131416 */
+
+  --line:          oklch(0.949 0.0083 91.48 / 0.1);  /* rgba(240,238,232,.10) */
+  --line-strong:   oklch(0.949 0.0083 91.48 / 0.18); /* rgba(240,238,232,.18) */
+
+  --ink:           oklch(0.9402 0.007 88.64);   /* #EDEBE6 */
+  --ink-muted:     oklch(0.7088 0.0089 121.69); /* #A0A29C */
+  --ink-faint:     oklch(0.5619 0.0108 119.74); /* #74766F */
+
+  --accent:          oklch(0.6672 0.093 183.33);        /* #46A79A */
+  --accent-wash:     oklch(0.6672 0.093 183.33 / 0.16); /* rgba(70,167,154,.16) */
+  --accent-contrast: oklch(1 0 0);                      /* #FFFFFF */
+
+  --shadow-float: 0 12px 32px -14px oklch(0 0 0 / 0.6),
+                  0 2px 8px -4px oklch(0 0 0 / 0.4);
+  --shadow-inset: inset 0 1px 2px 0 oklch(0 0 0 / 0.5);
+}
+
+/* ---------------------------------------------------------------------------
+   Tailwind theme. `inline` so utilities resolve through the vars above and
+   therefore flip with .dark automatically.
+--------------------------------------------------------------------------- */
+@theme inline {
+  /* Two faces. Nothing else. */
+  --font-sans:    var(--font-hanken), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-epilogue), ui-sans-serif, system-ui, sans-serif;
+
+  /* Daybook colour utilities: bg-canvas, text-ink-muted, border-line, ... */
+  --color-canvas:          var(--canvas);
+  --color-surface:         var(--surface);
+  --color-surface-sunk:    var(--surface-sunk);
+  --color-line:            var(--line);
+  --color-line-strong:     var(--line-strong);
+  --color-ink:             var(--ink);
+  --color-ink-muted:       var(--ink-muted);
+  --color-ink-faint:       var(--ink-faint);
+  --color-accent:          var(--accent);
+  --color-accent-wash:     var(--accent-wash);
+  --color-accent-contrast: var(--accent-contrast);
+  --color-confirmed:       var(--confirmed);
+  --color-pending:         var(--pending);
+  --color-cancelled:       var(--cancelled);
+
+  /* Bridge: the shadcn/ui semantic names mapped onto Daybook. These introduce
+     no new colours — every one is an alias. `muted` is the neutral hover
+     surface, so ghost and outline variants stay quiet and the accent stays
+     rare. */
+  --color-background:           var(--canvas);
+  --color-foreground:           var(--ink);
+  --color-card:                 var(--surface);
+  --color-card-foreground:      var(--ink);
+  --color-popover:              var(--surface);
+  --color-popover-foreground:   var(--ink);
+  --color-primary:              var(--accent);
+  --color-primary-foreground:   var(--accent-contrast);
+  --color-secondary:            var(--surface-sunk);
+  --color-secondary-foreground: var(--ink);
+  --color-muted:                var(--surface-sunk);
+  --color-muted-foreground:     var(--ink-muted);
+  --color-accent-foreground:    var(--accent-contrast);
+  --color-destructive:          var(--cancelled);
+  --color-border:               var(--line);
+  --color-input:                var(--line);
+  --color-ring:                 var(--accent);
+
+  /* Radius. shadcn primitives reach for sm/md on controls and lg/xl on
+     containers, so those alias onto the Daybook scale instead of adding a
+     second one. */
+  --radius-pill:    var(--radius-pill);
+  --radius-card:    var(--radius-card);
+  --radius-dialog:  var(--radius-dialog);
+  --radius-segment: var(--radius-segment);
+  --radius-sm: var(--radius-pill);
+  --radius-md: var(--radius-pill);
+  --radius-lg: var(--radius-card);
+  --radius-xl: var(--radius-dialog);
+
+  --shadow-float: var(--shadow-float);
+  --shadow-inset: var(--shadow-inset);
+}
+
+@layer base {
+  * {
+    border-color: var(--line);
+  }
+
+  html {
+    font-family: var(--font-sans);
+  }
+
+  body {
+    background-color: var(--canvas);
+    color: var(--ink);
+    font-size: 15px;
+    line-height: 1.55;
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Focus is never removed. 2px accent ring at 2px offset, everywhere. */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  /* In this product, a time is a headline. */
+  time,
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   The type scale, as named utilities so the two faces cannot get mixed up.
+   Epilogue carries every time and duration; Hanken Grotesk carries the rest.
+--------------------------------------------------------------------------- */
+@utility type-display {
+  font-family: var(--font-display);
+  font-size: clamp(36px, 5vw, 56px);
+  line-height: 1.05;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+@utility type-time-lg {
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1.1;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+@utility type-page-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+@utility type-time {
+  font-family: var(--font-display);
+  font-size: 15px;
+  line-height: 1.2;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@utility type-section {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+@utility type-body {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.55;
+  font-weight: 400;
+}
+
+@utility type-body-sm {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+@utility type-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* ---------------------------------------------------------------------------
+   Ribbon state encoding. Fill, pattern and value — never hue.
+--------------------------------------------------------------------------- */
+
+/* held by someone else */
+@utility hatch {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--line-strong) 0,
+    var(--line-strong) 1px,
+    transparent 1px,
+    transparent 7px
+  );
+}
+
+/* blocked / time off — the same pattern, denser */
+@utility hatch-dense {
+  background-image: repeating-linear-gradient(
+    45deg,
+    var(--line-strong) 0,
+    var(--line-strong) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

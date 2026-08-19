@@ -1,0 +1,75 @@
+# Openings
+
+A booking engine for local service businesses — clinics, salons, consultants.
+
+A visitor picks a service, optionally a staff member, a date and a time. The slot is **held** while
+they enter their details and pay a deposit; on payment the appointment is confirmed and a
+confirmation email with a calendar invite goes out. The business owner gets an admin area with a live
+agenda, manual booking, blocked time, and service/staff/hours management.
+
+## The two hard parts
+
+**Double-booking is prevented by the database, not the application.** A Postgres `EXCLUDE USING gist`
+constraint over `(staff_id, slot)` rejects overlapping appointments at any isolation level, with no
+locking code. The application catches SQLSTATE `23P01` and turns it into a friendly "that time was
+just taken". Booking buffers live inside the stored range, so the constraint enforces them for free.
+
+**All time math happens on the server, in the business timezone.** Recurring weekly hours are stored
+as plain local times so that "we open at 9" survives a DST change. The API returns ISO instants plus
+an IANA timezone; the client formats them with `Intl.DateTimeFormat` and does no date arithmetic.
+
+## Stack
+
+Next.js 16 (App Router, Turbopack) · React 19 · TypeScript · Tailwind CSS v4 · shadcn/ui ·
+Drizzle ORM + Postgres · Better Auth · Stripe Checkout · Resend + React Email · Upstash QStash ·
+Temporal (via `temporal-polyfill`) · Zod
+
+## Getting started
+
+```bash
+npm install
+```
+
+Copy the environment template and fill in at least `DATABASE_URL`, `BETTER_AUTH_SECRET`,
+`BETTER_AUTH_URL` and `NEXT_PUBLIC_APP_URL`:
+
+```bash
+cp .env.example .env.local
+```
+
+Everything else is optional — without a Stripe key deposits are skipped, and without a Resend key the
+mailer prints messages to the console, so the whole flow still runs offline.
+
+```bash
+npm run dev
+```
+
+| Command             | What it does                                  |
+| ------------------- | --------------------------------------------- |
+| `npm run dev`       | Dev server on http://localhost:3000           |
+| `npm run build`     | Production build                              |
+| `npm run start`     | Serve the production build                    |
+| `npm run typecheck` | Generate route types, then `tsc --noEmit`     |
+| `npm run lint`      | ESLint                                        |
+| `npm run email`     | React Email preview on http://localhost:3001  |
+
+## Design
+
+The design system is called **Daybook**: warm grey workspace, white surfaces, one deep verdigris
+accent, and time drawn as a proportional ribbon of material. Slot states are encoded by fill, pattern
+and value — never by hue — so the grid stays readable for colourblind users. Every token lives in
+`src/app/globals.css`, and nothing in the interface uses a colour that is not declared there.
+
+## Layout
+
+```
+src/app                 routes (App Router)
+src/components          application components
+src/components/ui       shadcn/ui primitives
+src/db                  Drizzle schema and client
+src/lib/scheduling      availability algorithm and all time math
+src/lib/payments        Stripe
+src/lib/notifications   mailer and outbox
+src/server              server actions and route handlers
+emails                  React Email templates
+```
