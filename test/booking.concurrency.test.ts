@@ -92,31 +92,48 @@ describe("the exclusion constraint under genuine concurrency", () => {
     // rather than the two happening to run one after the other.
     const first = await ctx.pool.connect();
     const second = await ctx.pool.connect();
+    let blocked: Promise<unknown> = Promise.resolve();
+
+    let wasWaitingOnLock = false;
 
     try {
+      // Ask the backend for its own pid. `client.processID` is unusable here:
+      // Neon's proxy reports a synthetic value that matches no row in
+      // pg_stat_activity, so the only reliable source is the server itself.
+      const secondPid = await backendPid(second);
+
       await first.query("BEGIN");
       await second.query("BEGIN");
 
       await first.query(insertSql(ctx, at(10), "first"));
 
-      // Fire the conflicting insert but do NOT await it — it will block on the
-      // constraint's lock, because the first transaction has not committed.
-      const blocked = second.query(insertSql(ctx, at(10, 30), "second"));
+      // Fire the conflicting insert but do NOT await it — it will block,
+      // because the first transaction has not committed.
+      blocked = second.query(insertSql(ctx, at(10, 30), "second"));
+      blocked.catch(() => {
+        // Asserted below; this only stops an unhandled rejection if the
+        // assertions throw first.
+      });
 
-      const isWaiting = await waitUntilBlockedOnLock(ctx, second);
-      expect(isWaiting).toBe(true);
+      wasWaitingOnLock = await waitUntilBlockedOnLock(ctx, secondPid);
 
-      // Releasing the first transaction is what lets the second resolve — as a
-      // rejection, because now it can see the committed conflicting row.
+      // Commit BEFORE asserting. Releasing the first transaction is what lets
+      // the blocked one resolve, and doing it unconditionally means a failed
+      // assertion can never strand a lock and starve the pool for every test
+      // that follows.
       await first.query("COMMIT");
 
       await expect(blocked).rejects.toMatchObject({ code: "23P01" });
-      await second.query("ROLLBACK");
     } finally {
+      await first.query("ROLLBACK").catch(() => {});
+      await second.query("ROLLBACK").catch(() => {});
       first.release();
       second.release();
     }
 
+    // The second writer genuinely waited on a lock held by the first, rather
+    // than the two happening to run one after the other.
+    expect(wasWaitingOnLock).toBe(true);
     expect(await countAppointments()).toBe(1);
   });
 });
@@ -318,18 +335,34 @@ function insertSql(context: TestContext, startsAt: Date, tag: string) {
 }
 
 /**
+ * The backend pid for a connection, straight from the server.
+ *
+ * `client.processID` comes from the startup handshake, and Neon's proxy fills
+ * it with a synthetic value that matches nothing in pg_stat_activity. Asking
+ * the backend directly is the only portable way to identify the session.
+ */
+async function backendPid(client: PoolClient): Promise<number> {
+  const result = await client.query<{ pid: number }>(
+    "SELECT pg_backend_pid() AS pid",
+  );
+  return result.rows[0].pid;
+}
+
+/**
  * Poll pg_stat_activity until the given backend is waiting on a lock.
  *
  * This is what turns "these ran at the same time" from an assumption into an
  * assertion: if the second INSERT were not blocked by the first transaction,
- * this would time out and the test would fail.
+ * this would time out and the test would fail. The wait shows up as
+ * wait_event_type 'Lock' on wait_event 'transactionid' — the second session
+ * waiting for the first transaction to end so it can find out whether the
+ * conflicting row became visible.
  */
 async function waitUntilBlockedOnLock(
   context: TestContext,
-  client: PoolClient,
+  pid: number,
   timeoutMs = 10_000,
 ): Promise<boolean> {
-  const pid = (client as unknown as { processID: number }).processID;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
