@@ -5,6 +5,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 
 import type { Db } from "@/db/client";
+import { EXCLUSION_VIOLATION, findPostgresError } from "@/db/errors";
 import { appointments, services, type Appointment } from "@/db/schema";
 
 import { buildBlockingRange, type BlockingRange } from "./slot";
@@ -89,29 +90,14 @@ export class ServiceNotFoundError extends Error {
   }
 }
 
-/** SQLSTATE 23P01. */
-const EXCLUSION_VIOLATION = "23P01";
-
 /**
- * Postgres errors arrive wrapped by the driver and sometimes re-wrapped by
- * Drizzle, so the code can sit a couple of links down the `cause` chain.
- * Matching on SQLSTATE rather than on a message keeps this locale-proof.
+ * The one error the whole design hinges on: SQLSTATE 23P01, raised by
+ * `appointments_no_overlap` when a concurrent transaction got the slot first.
+ * Unwrapping it lives in src/db/errors.ts, because the same trick is needed
+ * wherever a constraint is doing the work the application deliberately is not.
  */
 function isExclusionViolation(error: unknown): boolean {
-  let current: unknown = error;
-
-  for (let depth = 0; current && depth < 5; depth += 1) {
-    if (
-      typeof current === "object" &&
-      "code" in current &&
-      (current as { code?: unknown }).code === EXCLUSION_VIOLATION
-    ) {
-      return true;
-    }
-    current = (current as { cause?: unknown }).cause;
-  }
-
-  return false;
+  return findPostgresError(error, EXCLUSION_VIOLATION) !== null;
 }
 
 /* ===========================================================================

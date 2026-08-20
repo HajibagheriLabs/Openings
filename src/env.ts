@@ -3,14 +3,13 @@ import { z } from "zod";
 /**
  * Typed, validated configuration.
  *
- * Importing this module parses `process.env` and throws immediately if
- * anything required is missing or malformed, so a misconfigured deploy dies at
- * startup with a readable list instead of handing `undefined` to the Stripe
- * client three requests later.
+ * Configuration is validated against a schema and throws with the full list of
+ * what is wrong, so a misconfigured deploy dies with a readable message
+ * instead of handing `undefined` to the Stripe client three requests later.
  *
  * Two schemas, because the boundary matters:
- *  - `serverEnv` holds secrets and must never be imported from a client
- *    component.
+ *  - `serverEnv` holds secrets, is parsed lazily on first read, and refuses to
+ *    be read in the browser at all. See the note on `readServerEnv`.
  *  - `clientEnv` holds only `NEXT_PUBLIC_*` values. Those are read through
  *    literal `process.env.NEXT_PUBLIC_...` expressions below because Next
  *    inlines them at build time by textual substitution — dynamic lookup
@@ -69,12 +68,31 @@ const clientSchema = z.object({
   NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: z.string().min(1).optional(),
 });
 
+/**
+ * An empty variable means "not set".
+ *
+ * .env.example ships every optional value as `KEY=""`, which is how a dotenv
+ * file says "left blank on purpose". Without this, `""` reaches the schema as
+ * a present-but-too-short string and a deliberately blank Stripe key fails the
+ * build — so following the documented setup would produce an app that refuses
+ * to start. Blank-is-absent is also what makes a `.default()` apply.
+ */
+function withoutBlanks(
+  source: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      ([, value]) => value === undefined || value.trim() !== "",
+    ),
+  );
+}
+
 function parse<T extends z.ZodType>(
   schema: T,
   source: Record<string, string | undefined>,
   label: string,
 ): z.infer<T> {
-  const result = schema.safeParse(source);
+  const result = schema.safeParse(withoutBlanks(source));
 
   if (!result.success) {
     const details = result.error.issues
@@ -90,12 +108,51 @@ function parse<T extends z.ZodType>(
   return result.data;
 }
 
-/** Server-side configuration. Never import this from a client component. */
-export const serverEnv = parse(
-  serverSchema,
-  process.env as Record<string, string | undefined>,
-  "server",
-);
+export type ServerEnv = z.infer<typeof serverSchema>;
+export type ClientEnv = z.infer<typeof clientSchema>;
+
+let serverEnvCache: ServerEnv | null = null;
+
+function readServerEnv(): ServerEnv {
+  /**
+   * A Client Component that imports `clientEnv` pulls this whole module into
+   * the browser bundle. Nothing here leaks — the bundler replaces every
+   * non-public `process.env.X` with undefined — but if the server schema were
+   * parsed at module scope it would throw "DATABASE_URL is required" in the
+   * browser and take the page down. So the parse is deferred to first read,
+   * and reading it client-side is a loud error rather than a mystery.
+   */
+  if (typeof window !== "undefined") {
+    throw new Error(
+      "serverEnv was read in the browser. Server configuration never reaches " +
+        "the client — use clientEnv, and add a NEXT_PUBLIC_ value if the " +
+        "browser genuinely needs to know.",
+    );
+  }
+
+  return (serverEnvCache ??= parse(
+    serverSchema,
+    process.env as Record<string, string | undefined>,
+    "server",
+  ));
+}
+
+/**
+ * Server-side configuration. Never import this from a client component.
+ *
+ * Reads like a plain object and is parsed once, on the first property access.
+ * In practice that is still startup: `src/db/index.ts` reads DATABASE_URL
+ * while it is being evaluated, so a misconfigured deploy dies with the full
+ * list of what is missing before it serves a request.
+ */
+export const serverEnv: ServerEnv = new Proxy({} as ServerEnv, {
+  get: (_target, property) =>
+    readServerEnv()[property as keyof ServerEnv],
+  has: (_target, property) => property in readServerEnv(),
+  ownKeys: () => Reflect.ownKeys(readServerEnv()),
+  getOwnPropertyDescriptor: (_target, property) =>
+    Object.getOwnPropertyDescriptor(readServerEnv(), property),
+});
 
 /** Browser-safe configuration. Read literally so Next can inline the values. */
 export const clientEnv = parse(
@@ -108,5 +165,3 @@ export const clientEnv = parse(
   "client",
 );
 
-export type ServerEnv = z.infer<typeof serverSchema>;
-export type ClientEnv = z.infer<typeof clientSchema>;

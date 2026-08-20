@@ -20,6 +20,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@better-auth/drizzle-adapter": "1.7.1",
     "@neondatabase/serverless": "1.1.0",
     "@react-email/components": "1.0.12",
     "@upstash/qstash": "2.11.3",

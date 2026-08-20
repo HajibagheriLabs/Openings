@@ -142,32 +142,51 @@ export const sessions = pgTable("sessions", {
     .defaultNow(),
 });
 
-export const accounts = pgTable("accounts", {
-  id: text("id").primaryKey(),
-  accountId: text("account_id").notNull(),
-  providerId: text("provider_id").notNull(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  accessToken: text("access_token"),
-  refreshToken: text("refresh_token"),
-  idToken: text("id_token"),
-  accessTokenExpiresAt: timestamp("access_token_expires_at", {
-    withTimezone: true,
-  }),
-  refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
-    withTimezone: true,
-  }),
-  scope: text("scope"),
-  /** Hashed by Better Auth. Email + password is the only provider we enable. */
-  password: text("password"),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const accounts = pgTable(
+  "accounts",
+  {
+    id: text("id").primaryKey(),
+    /**
+     * The stable provider-side namespace an account belongs to. For the only
+     * provider enabled here it is the synthetic local issuer Better Auth
+     * derives from the provider id ("credential"); an OAuth provider would put
+     * its real issuer URL here.
+     *
+     * Required by Better Auth 1.7. Together with `account_id` it is the key
+     * that recognises a returning identity, which is why the unique index
+     * below covers the pair rather than either column alone.
+     */
+    issuer: text("issuer").notNull(),
+    accountId: text("account_id").notNull(),
+    providerId: text("provider_id").notNull(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    accessToken: text("access_token"),
+    refreshToken: text("refresh_token"),
+    idToken: text("id_token"),
+    accessTokenExpiresAt: timestamp("access_token_expires_at", {
+      withTimezone: true,
+    }),
+    refreshTokenExpiresAt: timestamp("refresh_token_expires_at", {
+      withTimezone: true,
+    }),
+    scope: text("scope"),
+    /** Hashed by Better Auth. Email + password is the only provider we enable. */
+    password: text("password"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    /** One identity per issuer. Better Auth declares this index itself. */
+    unique("accounts_issuer_account_id_unique").on(t.issuer, t.accountId),
+    index("accounts_user_id_idx").on(t.userId),
+  ],
+);
 
 export const verifications = pgTable("verifications", {
   id: text("id").primaryKey(),
