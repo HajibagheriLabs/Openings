@@ -23,11 +23,34 @@ export function parseMoneyToCents(input: string): number | null {
   return Number(whole) * 100 + Number(fraction.padEnd(2, "0"));
 }
 
+/**
+ * Cents back into the plain string the price input edits.
+ *
+ * The exact inverse of `parseMoneyToCents`, and the only correct way to
+ * populate an edit form: reading a price out of the database and rendering it
+ * with a currency formatter would put a symbol and a thousands separator into
+ * a field that then refuses to parse.
+ */
+export function centsToInput(cents: number): string {
+  return (cents / 100).toFixed(2);
+}
+
+/**
+ * Pinned, not the visitor's locale — the same hazard as DEFAULT_TIME_LOCALE.
+ *
+ * A Server Component and the browser that hydrates it must produce identical
+ * text. `undefined` resolves to the server's locale on one side and the
+ * visitor's on the other, so "€45.00" and "45,00 €" disagree and React tears
+ * the tree down. Pass a locale explicitly on a surface that genuinely wants
+ * the visitor's conventions, and render that surface on the client.
+ */
+export const DEFAULT_MONEY_LOCALE = "en-GB";
+
 /** Cents to a display string, in the business's currency. */
 export function formatCents(
   cents: number,
   currency: string,
-  locale?: string,
+  locale: string = DEFAULT_MONEY_LOCALE,
 ): string {
   return new Intl.NumberFormat(locale, {
     style: "currency",
@@ -56,6 +79,35 @@ export function depositCentsFor(service: {
         Math.round((service.priceCents * service.depositValue) / 100),
         service.priceCents,
       );
+  }
+}
+
+/**
+ * The deposit policy in words, for a list row.
+ *
+ * A percentage is shown WITH the amount it works out to. "20%" is a policy;
+ * "20% (9.00)" is what the customer's card is actually charged, and the owner
+ * setting the policy is entitled to see both without doing the arithmetic.
+ * Returns null when there is no deposit — an absent fact, not the word "none".
+ */
+export function describeDeposit(
+  service: {
+    priceCents: number;
+    depositType: "none" | "flat" | "percent";
+    depositValue: number;
+  },
+  currency: string,
+  locale: string = DEFAULT_MONEY_LOCALE,
+): string | null {
+  const cents = depositCentsFor(service);
+
+  switch (service.depositType) {
+    case "none":
+      return null;
+    case "flat":
+      return `${formatCents(cents, currency, locale)} deposit`;
+    case "percent":
+      return `${service.depositValue}% deposit (${formatCents(cents, currency, locale)})`;
   }
 }
 

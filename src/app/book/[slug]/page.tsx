@@ -1,11 +1,12 @@
-import { and, asc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
 import { DayPicker } from "@/components/booking/day-picker";
 import { db } from "@/db";
-import { businesses, services } from "@/db/schema";
+import { businesses } from "@/db/schema";
 import { buildBookingDemoDay } from "@/lib/demo/ribbon-demo";
+import { loadBookableServices } from "@/server/queries/catalog";
 
 /**
  * The customer's booking page. Public — no session, no account, ever.
@@ -49,17 +50,21 @@ export default async function BookingPage({
     notFound();
   }
 
-  const [service] = await db
-    .select()
-    .from(services)
-    .where(
-      and(
-        eq(services.businessId, business.id),
-        eq(services.isActive, true),
-      ),
-    )
-    .orderBy(asc(services.displayOrder))
-    .limit(1);
+  /**
+   * BOOKABLE, not merely active.
+   *
+   * The same predicate the admin's services list flags with — one function, so
+   * what the owner is told and what the customer is shown cannot drift apart.
+   * An active service with nobody active assigned to it must not reach this
+   * page: the availability algorithm would have no staff to expand hours for
+   * and would render an empty day with no explanation.
+   */
+  const bookable = await loadBookableServices(
+    business.id,
+    business.slotGranularityMin,
+  );
+
+  const service = bookable[0];
 
   if (!service) {
     notFound();

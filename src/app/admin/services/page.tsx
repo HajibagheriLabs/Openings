@@ -1,31 +1,43 @@
 import type { Metadata } from "next";
-import { Scissors } from "lucide-react";
 
-import { EmptyState } from "@/components/empty-state";
-import { PageHeader } from "@/components/page-header";
+import { ServicesManager } from "@/components/admin/services/services-manager";
+import {
+  getOwnedBusiness,
+  requireBusinessAccess,
+  requireUser,
+} from "@/lib/auth-server";
+import { loadServiceRows, loadStaffSummaries } from "@/server/queries/catalog";
 
 export const metadata: Metadata = {
   title: "Services",
 };
 
 /**
- * Placeholder. The rail needs somewhere to go, and an empty state that says
- * what is coming beats a 404 that says nothing.
+ * The services screen.
+ *
+ * Reads on the server, mutates through Server Actions, and hands the client
+ * plain data. Bookability is COMPUTED HERE, from the same predicate the public
+ * booking page uses — the flag an owner sees and the decision a customer's
+ * page makes are one function, so they cannot disagree.
  */
-export default function ServicesPage() {
-  return (
-    <div className="flex flex-col gap-8">
-      <PageHeader
-        eyebrow="Services"
-        title="Services"
-        description="What customers can book, how long each takes, and what it costs."
-      />
+export default async function ServicesPage() {
+  const user = await requireUser("/admin/services");
+  const owned = await getOwnedBusiness(user.id);
 
-      <EmptyState
-        icon={Scissors}
-        title="Nothing to manage here yet"
-        description="Your first service was created during setup. Editing services, buffers and deposits arrives with the service settings."
-      />
-    </div>
+  // Re-resolved rather than trusted from the layout, like every owner route.
+  const { business } = await requireBusinessAccess(owned!.id);
+
+  const [services, staff] = await Promise.all([
+    loadServiceRows(business.id, business.slotGranularityMin),
+    loadStaffSummaries(business.id),
+  ]);
+
+  return (
+    <ServicesManager
+      services={services}
+      staff={staff}
+      currency={business.currency}
+      slotGranularityMin={business.slotGranularityMin}
+    />
   );
 }

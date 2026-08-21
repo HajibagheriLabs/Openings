@@ -17,6 +17,16 @@ export const UNIQUE_VIOLATION = "23505";
 /** SQLSTATE 23P01 — exclusion_violation. The no-double-booking constraint. */
 export const EXCLUSION_VIOLATION = "23P01";
 
+/**
+ * SQLSTATE 23503 — foreign_key_violation.
+ *
+ * `appointments` references services and staff with ON DELETE RESTRICT, so
+ * this is what the database says when someone tries to delete a service that
+ * an appointment still points at. The admin checks first and explains; this
+ * code is the backstop for the race between the check and the delete.
+ */
+export const FOREIGN_KEY_VIOLATION = "23503";
+
 interface PostgresErrorShape {
   code?: unknown;
   constraint?: unknown;

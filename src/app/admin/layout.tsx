@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AdminShell } from "@/components/admin/admin-shell";
+import { Toaster } from "@/components/toaster";
 import { getOwnedBusiness, requireUser } from "@/lib/auth-server";
 import { signOutAction } from "@/server/actions/session";
 
@@ -43,6 +44,10 @@ export default async function AdminLayout({
       signOutAction={signOutAction}
     >
       {children}
+
+      {/* Mounted once for the whole owner area. Every mutation in here reports
+          through it, so a save that fails is never silent. */}
+      <Toaster />
     </AdminShell>
   );
 }

@@ -18,6 +18,7 @@ import {
   BUSINESS_HINT_MAX_AGE_SECONDS,
 } from "@/lib/auth-cookies";
 import { getOwnedBusiness, requireUser } from "@/lib/auth-server";
+import { initialsFrom } from "@/lib/initials";
 import { parseMoneyToCents } from "@/lib/money";
 import { Temporal } from "@/lib/scheduling/temporal";
 import { RESERVED_SLUGS, SLUG_PATTERN, slugify } from "@/lib/slug";
@@ -47,20 +48,6 @@ export type OnboardingResult = {
   /** Field name, e.g. "slug", so the wizard can mark the input. */
   field?: string;
 };
-
-/** "Rosa Delgado" becomes "RD". Shown on booked ribbon segments. */
-function initialsFrom(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-
-  if (parts.length === 0) {
-    return "?";
-  }
-
-  const first = parts[0].charAt(0);
-  const last = parts.length > 1 ? parts[parts.length - 1].charAt(0) : "";
-
-  return (first + last).toUpperCase() || "?";
-}
 
 /**
  * Is this address free?
