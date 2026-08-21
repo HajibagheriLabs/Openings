@@ -150,7 +150,14 @@
     -webkit-font-smoothing: antialiased;
   }
 
-  /* Focus is never removed. 2px accent ring at 2px offset, everywhere. */
+  /* Focus is never removed. 2px accent ring at 2px offset, everywhere.
+
+     DO NOT PUT `outline-none` ON AN INTERACTIVE CONTROL. This rule lives in
+     the `base` layer and Tailwind's utilities come after it, so a single
+     `outline-none` in a className silently wins and the control ends up with
+     no focus indicator at all — it still looks fine with a mouse, and becomes
+     unusable with a keyboard. Suppress the outline only on non-interactive
+     containers that receive programmatic focus, such as a Radix dialog panel. */
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;

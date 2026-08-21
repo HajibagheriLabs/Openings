@@ -1,31 +1,34 @@
 import { asc, eq } from "drizzle-orm";
 import type { Metadata } from "next";
 
+import { PageHeader } from "@/components/page-header";
+import { RibbonLegend } from "@/components/ribbon";
+import { AgendaRibbon } from "@/components/admin/agenda-ribbon";
+import { formatInstantDate } from "@/components/time-text";
 import { db } from "@/db";
-import { availabilityRules, services, staff } from "@/db/schema";
-import { clientEnv } from "@/env";
+import { staff } from "@/db/schema";
 import {
   getOwnedBusiness,
   requireBusinessAccess,
   requireUser,
 } from "@/lib/auth-server";
-import { formatCents } from "@/lib/money";
-import { WEEKDAYS } from "@/lib/validation/onboarding";
+import { buildAdminDemoDay } from "@/lib/demo/ribbon-demo";
 
 export const metadata: Metadata = {
-  title: "Agenda",
+  title: "Today",
 };
 
 /**
- * A placeholder agenda.
+ * The agenda: the Ribbon with one column per staff member.
  *
- * It exists so onboarding has somewhere to land and so the setup can be seen
- * to have worked: the business, the owner's staff row, the hours and the first
- * service, read back out of the database. The Ribbon — the hand-built CSS grid
- * over a time axis, at a fixed pixel-per-minute scale — replaces this whole
- * page next.
+ * The segments below are STATIC DEMO DATA from src/lib/demo — there is no
+ * availability algorithm yet and this page invents nothing about real
+ * bookings. What is real is the shape of the contract: the server resolves the
+ * day in the business's timezone and hands the component minutes and instants,
+ * and the component draws them. Swapping the demo builder for
+ * src/lib/scheduling later changes this file and nothing inside the ribbon.
  */
-export default async function AdminPage() {
+export default async function AdminTodayPage() {
   const user = await requireUser("/admin");
   const owned = await getOwnedBusiness(user.id);
 
@@ -38,101 +41,40 @@ export default async function AdminPage() {
    */
   const { business } = await requireBusinessAccess(owned!.id);
 
-  const [team, catalogue] = await Promise.all([
-    db
-      .select()
-      .from(staff)
-      .where(eq(staff.businessId, business.id))
-      .orderBy(asc(staff.displayOrder)),
-    db
-      .select()
-      .from(services)
-      .where(eq(services.businessId, business.id))
-      .orderBy(asc(services.displayOrder)),
-  ]);
+  const team = await db
+    .select()
+    .from(staff)
+    .where(eq(staff.businessId, business.id))
+    .orderBy(asc(staff.displayOrder));
 
-  const rules = team.length
-    ? await db
-        .select()
-        .from(availabilityRules)
-        .where(eq(availabilityRules.staffId, team[0].id))
-        .orderBy(asc(availabilityRules.weekday))
-    : [];
-
-  const bookingUrl = `${clientEnv.NEXT_PUBLIC_APP_URL}/book/${business.slug}`;
+  const day = buildAdminDemoDay(
+    business.timezone,
+    team.map((member) => ({
+      id: member.id,
+      name: member.name,
+      initials: member.initials,
+    })),
+  );
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-2">
-        <h1 className="type-page-title text-ink">{business.name}</h1>
-        <p className="type-body text-ink-muted">
-          Set up and ready. Your booking page will live at{" "}
-          <span className="text-ink">{bookingUrl}</span>.
-        </p>
-        <p className="type-body-sm text-ink-faint">
-          All times are worked out in {business.timezone.replace(/_/g, " ")}.
-        </p>
-      </header>
+      <PageHeader
+        eyebrow="Today"
+        title={formatInstantDate(day.todayInstant, business.timezone)}
+        description="Time is drawn to scale, so a 90-minute appointment takes up three times the space of a 30-minute one. Booked time is carved out of the day rather than stacked on top of it."
+      />
 
-      <section className="flex flex-col gap-3">
-        <h2 className="type-label">Opening hours</h2>
-        <ul className="flex flex-col gap-2 rounded-card border border-line bg-surface p-4">
-          {WEEKDAYS.map(({ weekday, label }) => {
-            const rule = rules.find((entry) => entry.weekday === weekday);
+      <AgendaRibbon
+        window={day.window}
+        columns={day.columns}
+        timeZone={business.timezone}
+        nowMinute={day.nowMinute}
+      />
 
-            return (
-              <li
-                key={weekday}
-                className="flex items-baseline justify-between gap-4"
-              >
-                <span className="type-body text-ink">{label}</span>
-                {rule ? (
-                  <span className="type-time text-ink">
-                    {rule.startLocal.slice(0, 5)} – {rule.endLocal.slice(0, 5)}
-                  </span>
-                ) : (
-                  <span className="type-body-sm text-ink-faint">Closed</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="type-label">Services</h2>
-        <ul className="flex flex-col gap-2">
-          {catalogue.map((service) => (
-            <li
-              key={service.id}
-              className="flex flex-wrap items-baseline justify-between gap-3 rounded-card border border-line bg-surface px-4 py-3"
-            >
-              <span className="type-section text-ink">{service.name}</span>
-              <span className="type-time text-ink-muted">
-                {service.durationMin} min ·{" "}
-                {formatCents(service.priceCents, business.currency)}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="type-label">Who takes bookings</h2>
-        <ul className="flex flex-col gap-2">
-          {team.map((member) => (
-            <li
-              key={member.id}
-              className="flex items-center gap-3 rounded-card border border-line bg-surface px-4 py-3"
-            >
-              <span className="type-time flex size-9 items-center justify-center rounded-pill bg-surface-sunk text-ink-muted">
-                {member.initials}
-              </span>
-              <span className="type-body text-ink">{member.name}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <RibbonLegend
+        states={["open", "held", "booked", "blocked"]}
+        className="max-w-[46ch]"
+      />
     </div>
   );
 }

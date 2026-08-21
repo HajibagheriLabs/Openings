@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import { Field, FormError } from "@/components/field";
-import { Button } from "@/components/ui/button";
+import { PillButton } from "@/components/pill-button";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
 import { PASSWORD_MIN_LENGTH, resetPasswordSchema } from "@/lib/validation/auth";
@@ -76,13 +76,13 @@ export function ResetPasswordForm({ token }: { token: string }) {
         <p className="type-body text-ink-muted">
           Any other browser that was signed in has been signed out.
         </p>
-        <Button
+        <PillButton
           type="button"
           onClick={() => router.push("/sign-in")}
-          className="type-section h-11 w-full rounded-pill"
+          block
         >
           Sign in
-        </Button>
+        </PillButton>
       </div>
     );
   }
@@ -128,13 +128,13 @@ export function ResetPasswordForm({ token }: { token: string }) {
         )}
       </Field>
 
-      <Button
+      <PillButton
         type="submit"
         disabled={pending}
-        className="type-section h-11 w-full rounded-pill"
+        block
       >
         {pending ? "Saving…" : "Save the new password"}
-      </Button>
+      </PillButton>
 
       <Link
         href="/forgot-password"

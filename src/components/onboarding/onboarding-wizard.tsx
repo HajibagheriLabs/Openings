@@ -3,7 +3,8 @@
 import { useState, useTransition } from "react";
 
 import { FormError } from "@/components/field";
-import { Button } from "@/components/ui/button";
+import { PillButton } from "@/components/pill-button";
+import { ProgressLine } from "@/components/progress-line";
 import { slugify } from "@/lib/slug";
 import {
   DEFAULT_OPENING_HOURS,
@@ -200,19 +201,11 @@ export function OnboardingWizard({ ownerName }: { ownerName: string }) {
         </div>
 
         {/* A thin line, filled to the step. Never numbered circles. */}
-        <div
-          role="progressbar"
-          aria-valuemin={1}
-          aria-valuemax={STEPS.length}
-          aria-valuenow={stepIndex + 1}
-          aria-label="Setup progress"
-          className="h-0.5 w-full overflow-hidden rounded-pill bg-surface-sunk"
-        >
-          <div
-            className="h-full bg-accent transition-[width] duration-200"
-            style={{ width: `${((stepIndex + 1) / STEPS.length) * 100}%` }}
-          />
-        </div>
+        <ProgressLine
+          step={stepIndex + 1}
+          total={STEPS.length}
+          label="Setup progress"
+        />
       </header>
 
       <FormError>{formError}</FormError>
@@ -240,29 +233,28 @@ export function OnboardingWizard({ ownerName }: { ownerName: string }) {
 
       <div className="flex items-center gap-3">
         {stepIndex > 0 ? (
-          <Button
+          <PillButton
             type="button"
-            variant="outline"
+            variant="secondary"
             onClick={goBack}
             disabled={submitting}
-            className="type-section h-11 rounded-pill px-5"
           >
             Back
-          </Button>
+          </PillButton>
         ) : null}
 
-        <Button
+        <PillButton
           type="button"
           onClick={isLastStep ? submit : goNext}
           disabled={submitting}
-          className="type-section h-11 flex-1 rounded-pill"
+          className="flex-1"
         >
           {isLastStep
             ? submitting
               ? "Creating your business…"
               : "Create my business"
             : "Continue"}
-        </Button>
+        </PillButton>
       </div>
     </div>
   );

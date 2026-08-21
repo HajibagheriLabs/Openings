@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 
 import { Field, FormError } from "@/components/field";
-import { Button } from "@/components/ui/button";
+import { PillButton } from "@/components/pill-button";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth-client";
 import { forgotPasswordSchema } from "@/lib/validation/auth";
@@ -99,13 +99,13 @@ export function ForgotPasswordForm() {
         )}
       </Field>
 
-      <Button
+      <PillButton
         type="submit"
         disabled={pending}
-        className="type-section h-11 w-full rounded-pill"
+        block
       >
         {pending ? "Sending…" : "Send the link"}
-      </Button>
+      </PillButton>
 
       <Link
         href="/sign-in"

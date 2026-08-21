@@ -17,7 +17,7 @@ function Input({ className, type, ...props }: React.ComponentProps<"input">) {
       type={type}
       data-slot="input"
       className={cn(
-        "type-body h-11 w-full min-w-0 rounded-pill border border-line bg-surface-sunk px-4 text-ink transition-colors outline-none",
+        "type-body h-11 w-full min-w-0 rounded-pill border border-line bg-surface-sunk px-4 text-ink transition-colors",
         "placeholder:text-ink-faint",
         "disabled:cursor-not-allowed disabled:opacity-50",
         "aria-invalid:border-cancelled",

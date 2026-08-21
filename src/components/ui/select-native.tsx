@@ -22,7 +22,7 @@ function SelectNative({
       <select
         data-slot="select-native"
         className={cn(
-          "type-body h-11 w-full appearance-none rounded-pill border border-line bg-surface-sunk py-0 pr-10 pl-4 text-ink transition-colors outline-none",
+          "type-body h-11 w-full appearance-none rounded-pill border border-line bg-surface-sunk py-0 pr-10 pl-4 text-ink transition-colors",
           "disabled:cursor-not-allowed disabled:opacity-50",
           "aria-invalid:border-cancelled",
           className,

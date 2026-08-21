@@ -1,9 +1,9 @@
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { signOutAction } from "@/server/actions/session";
+import { AdminShell } from "@/components/admin/admin-shell";
 import { getOwnedBusiness, requireUser } from "@/lib/auth-server";
-import { APP_NAME } from "@/lib/brand";
+import { signOutAction } from "@/server/actions/session";
 
 /**
  * The owner area.
@@ -16,8 +16,9 @@ import { APP_NAME } from "@/lib/brand";
  * touching a specific business, because a layout cannot vouch for a route
  * parameter it never saw.
  *
- * The left rail and the ribbon grid land with the agenda. For now this is the
- * frame they will hang in.
+ * The frame itself is a Client Component (it holds the rail's collapsed state
+ * and the drawer), so everything it needs is resolved here and handed down as
+ * plain props.
  */
 export default async function AdminLayout({
   children,
@@ -32,31 +33,16 @@ export default async function AdminLayout({
   }
 
   return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex w-full max-w-[1100px] flex-wrap items-center justify-between gap-4 px-5 py-4">
-          <div className="flex flex-col">
-            <p className="type-label">{APP_NAME}</p>
-            <p className="type-section text-ink">{business.name}</p>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <p className="type-body-sm text-ink-muted">{user.email}</p>
-            <form action={signOutAction}>
-              <button
-                type="submit"
-                className="type-body-sm rounded-pill border border-line px-4 py-2 text-ink-muted transition-colors hover:bg-surface-sunk"
-              >
-                Sign out
-              </button>
-            </form>
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-[1100px] flex-1 px-5 py-8">
-        {children}
-      </main>
-    </div>
+    <AdminShell
+      businessName={business.name}
+      timeZone={business.timezone}
+      // Taken here rather than in the browser: the timezone chip names the
+      // offset in force right now, and DST means that depends on the date.
+      nowInstant={new Date().toISOString()}
+      user={{ name: user.name, email: user.email }}
+      signOutAction={signOutAction}
+    >
+      {children}
+    </AdminShell>
   );
 }
