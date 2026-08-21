@@ -52,9 +52,19 @@ export interface RibbonSegment {
    * Formatting an ISO instant into a given timezone with Intl.DateTimeFormat
    * is not arithmetic, and it is exactly what the client is supposed to do.
    * Deriving one of these from the other, in either direction, is not.
+   *
+   * OPTIONAL, AND THE ABSENCE IS MEANINGFUL. A concrete day — an agenda, a
+   * customer's picker — always has instants and always passes them. A
+   * RECURRING WEEKLY PATTERN does not: "Monday, 09:00 to 17:00" is a fact
+   * about the clock on the wall that means a different instant every week and
+   * two different instants on the two days DST moves. Manufacturing one so
+   * this field could stay required would be inventing a fact, so the hours
+   * preview omits them and the segment labels itself from `startMinute` and
+   * `durationMin` instead — which is not arithmetic either, because 540
+   * minutes past midnight IS nine o'clock, everywhere, always.
    */
-  startsAt: string;
-  endsAt: string;
+  startsAt?: string;
+  endsAt?: string;
 
   /**
    * Shown inside the segment when there is room, and always in the
@@ -82,6 +92,29 @@ export interface RibbonSegment {
 
   /** Blocks interaction without implying the slot is gone. */
   disabled?: boolean;
+}
+
+/**
+ * A segment on a CONCRETE DAY, where the instants are guaranteed.
+ *
+ * Anything a customer can actually book is one of these: you cannot hold, pay
+ * for or put in a calendar a recurring pattern, only a real moment. Surfaces
+ * that go on to use `startsAt` — the booking summary, the confirmation, the
+ * .ics — narrow to this type first rather than reaching for a non-null
+ * assertion, so "this span is a real instant" stays something the compiler
+ * checks instead of something a comment claims.
+ */
+export type DatedRibbonSegment = RibbonSegment & {
+  startsAt: string;
+  endsAt: string;
+};
+
+/** True when a segment sits on a real day rather than describing a pattern. */
+export function isDatedSegment(
+  segment: RibbonSegment,
+): segment is DatedRibbonSegment {
+  return typeof segment.startsAt === "string" &&
+    typeof segment.endsAt === "string";
 }
 
 export interface RibbonColumn {

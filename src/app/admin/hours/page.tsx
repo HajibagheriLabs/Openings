@@ -1,31 +1,37 @@
 import type { Metadata } from "next";
-import { Clock } from "lucide-react";
 
-import { EmptyState } from "@/components/empty-state";
-import { PageHeader } from "@/components/page-header";
+import { HoursManager } from "@/components/admin/hours/hours-manager";
+import {
+  getOwnedBusiness,
+  requireBusinessAccess,
+  requireUser,
+} from "@/lib/auth-server";
+import { Temporal } from "@/lib/scheduling/temporal";
+import { loadStaffHours } from "@/server/queries/hours";
 
 export const metadata: Metadata = {
   title: "Hours",
 };
 
 /**
- * Placeholder. The rail needs somewhere to go, and an empty state that says
- * what is coming beats a 404 that says nothing.
+ * Weekly hours, per staff member, as dated versions.
+ *
+ * `today` is resolved HERE, on the server, in the BUSINESS's timezone — not in
+ * the browser and not in UTC. Every "is this version in force", "can this
+ * start date be used" and "is this one still editable" comparison downstream
+ * is against this date, so a shop in Auckland is never told its current hours
+ * start tomorrow because the server's clock is still on yesterday.
  */
-export default function HoursPage() {
-  return (
-    <div className="flex flex-col gap-8">
-      <PageHeader
-        eyebrow="Hours"
-        title="Opening hours"
-        description="Your recurring weekly hours, plus holidays and one-off closures."
-      />
+export default async function HoursPage() {
+  const user = await requireUser("/admin/hours");
+  const owned = await getOwnedBusiness(user.id);
 
-      <EmptyState
-        icon={Clock}
-        title="Hours are set from your weekly pattern"
-        description="They are stored as local wall-clock times, so nine o'clock stays nine o'clock through a daylight-saving change. Editing them lands here."
-      />
-    </div>
+  const { business } = await requireBusinessAccess(owned!.id);
+
+  const today = Temporal.Now.plainDateISO(business.timezone).toString();
+  const staff = await loadStaffHours(business.id, today);
+
+  return (
+    <HoursManager staff={staff} timeZone={business.timezone} today={today} />
   );
 }

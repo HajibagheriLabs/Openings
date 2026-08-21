@@ -11,4 +11,10 @@ export {
   windowDuration,
   type RibbonWindow,
 } from "./scale";
-export type { RibbonColumn, RibbonSegment, SegmentState } from "./types";
+export {
+  isDatedSegment,
+  type DatedRibbonSegment,
+  type RibbonColumn,
+  type RibbonSegment,
+  type SegmentState,
+} from "./types";

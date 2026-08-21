@@ -1,5 +1,6 @@
 import {
   CalendarDays,
+  CalendarOff,
   Clock,
   Contact,
   Scissors,
@@ -28,6 +29,7 @@ export const ADMIN_NAV: AdminNavItem[] = [
   { href: "/admin/services", label: "Services", icon: Scissors },
   { href: "/admin/staff", label: "Staff", icon: Users },
   { href: "/admin/hours", label: "Hours", icon: Clock },
+  { href: "/admin/time-off", label: "Time off", icon: CalendarOff },
   { href: "/admin/customers", label: "Customers", icon: Contact },
   { href: "/admin/settings", label: "Settings", icon: Settings },
 ];

@@ -6,6 +6,7 @@ import { BookingShell } from "@/components/booking/booking-shell";
 import { DurationChip } from "@/components/duration-chip";
 import { PillButton } from "@/components/pill-button";
 import {
+  isDatedSegment,
   Ribbon,
   RibbonLegend,
   type RibbonColumn,
@@ -70,8 +71,14 @@ export function DayPicker({
     }),
   }));
 
+  /**
+   * Narrowed to a dated segment: the summary below shows a real time, and a
+   * pattern has none. A day picker never receives one, and the compiler now
+   * knows that rather than being told.
+   */
   const selected = columns
     .flatMap((column) => column.segments)
+    .filter(isDatedSegment)
     .find((segment) => segment.id === selectedId);
 
   function choose(segment: RibbonSegment) {

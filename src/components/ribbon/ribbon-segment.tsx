@@ -1,6 +1,7 @@
 "use client";
 
 import { formatDuration, formatInstantRange } from "@/components/time-text";
+import { formatLocalMinuteRange } from "@/lib/scheduling/week";
 import { cn } from "@/lib/utils";
 
 import { hitAreaInsetPx, lengthPx, offsetPx } from "./scale";
@@ -78,12 +79,20 @@ export function RibbonSegmentView({
   const top = offsetPx(segment.startMinute, window, pxPerMin);
   const height = lengthPx(segment.durationMin, pxPerMin);
 
-  const range = formatInstantRange(
-    segment.startsAt,
-    segment.endsAt,
-    timeZone,
-    locale,
-  );
+  /**
+   * The label, from instants when there are instants and from the wall clock
+   * when there are not.
+   *
+   * A concrete day always supplies instants and gets them formatted in the
+   * business's zone. A recurring weekly pattern has none — see the note on
+   * RibbonSegment.startsAt — so it is labelled from the minute it sits at,
+   * which is the same number the geometry above already used.
+   */
+  const range =
+    segment.startsAt && segment.endsAt
+      ? formatInstantRange(segment.startsAt, segment.endsAt, timeZone, locale)
+      : formatLocalMinuteRange(segment.startMinute, segment.durationMin);
+
   const duration = formatDuration(segment.durationMin);
 
   const inert =
