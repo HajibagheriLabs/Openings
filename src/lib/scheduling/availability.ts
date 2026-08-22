@@ -499,6 +499,43 @@ export interface AvailabilitySlot {
   staffIds: string[];
 }
 
+/** A span of the day, as ISO instants, for drawing rather than for booking. */
+export interface ShapeSpan {
+  startsAt: string;
+  endsAt: string;
+}
+
+/**
+ * THE SHAPE OF THE DAY, as opposed to what can be booked in it.
+ *
+ * `slots` answers "when could I come in?". This answers "what does the day
+ * look like?" — and the customer's picker needs both, because a day drawn as
+ * four floating buttons is indistinguishable from a day nobody wants, while a
+ * day drawn as a strip of material with two appointments carved out of it is
+ * visibly a working day that happens to be busy. The second is more
+ * trustworthy, and it is the same information the business already published.
+ *
+ * Every span is merged across the staff in scope and clipped to the requested
+ * range, so `hours` is the union of everybody's shift, `free` is the union of
+ * everybody's free time, and the two subtractions in between account for the
+ * whole difference:
+ *
+ *     hours = free + busy + closed
+ *
+ * Nothing here identifies WHO is busy. A customer is entitled to know the
+ * shop is full at two o'clock; they are not entitled to a roster.
+ */
+export interface DayShape {
+  /** Published opening hours: the union of every qualified staff shift. */
+  hours: ShapeSpan[];
+  /** Inside those hours, time somebody is genuinely available for. */
+  free: ShapeSpan[];
+  /** Inside those hours, time taken by an appointment or a live hold. */
+  busy: ShapeSpan[];
+  /** Inside those hours, time off that closes it for everybody in scope. */
+  closed: ShapeSpan[];
+}
+
 export interface AvailabilityResult {
   /** IANA identifier. The client formats the instants above with this. */
   timeZone: TimeZoneId;
@@ -509,6 +546,8 @@ export interface AvailabilityResult {
   blockedMin: number;
   /** Ascending by instant. */
   slots: AvailabilitySlot[];
+  /** How the day looks, for drawing. See DayShape. */
+  shape: DayShape;
   /**
    * The policy that was actually applied, so a caller can explain an empty
    * list — "nothing today, the next booking has to be two hours out" — rather
@@ -577,6 +616,7 @@ export function computeAvailability(
     durationMin: service.durationMin,
     blockedMin,
     slots: [],
+    shape: { hours: [], free: [], busy: [], closed: [] },
     policy,
   };
 
@@ -596,6 +636,13 @@ export function computeAvailability(
   /* Steps 2 and 3 — subtract closures and busy time, then step 4 — slide. */
   const startsToStaff = new Map<number, string[]>();
 
+  /* Accumulated across staff for the DayShape. Unions, not per-person lists:
+     the customer's picker draws one strip, and "somebody is free at two" is
+     the only fact it may state. */
+  const allHours: Span[] = [];
+  const allAfterClosures: Span[] = [];
+  const allFree: Span[] = [];
+
   for (const member of context.staff) {
     const open = openByStaff.get(member.id) ?? [];
 
@@ -603,13 +650,14 @@ export function computeAvailability(
       continue;
     }
 
-    const cuts: Span[] = [];
+    const closures: Span[] = [];
+    const taken: Span[] = [];
 
     // Step 2. A business-wide closure (staff_id IS NULL) removes time from
     // everyone, which is a different fact from every individual being off.
     for (const closure of context.timeOff) {
       if (closure.staffId === null || closure.staffId === member.id) {
-        cuts.push({
+        closures.push({
           start: closure.startsAt.getTime(),
           end: closure.endsAt.getTime(),
         });
@@ -619,14 +667,24 @@ export function computeAvailability(
     // Step 3. The stored blocking range, buffers already inside it.
     for (const busy of context.blocked) {
       if (busy.staffId === member.id) {
-        cuts.push({
+        taken.push({
           start: busy.startsAt.getTime(),
           end: busy.endsAt.getTime(),
         });
       }
     }
 
-    const free = subtractSpans(open, cuts);
+    /* Subtracted in two passes rather than one so the two REASONS stay
+       distinguishable for the drawing. `subtractSpans` merges its cuts, so
+       doing it in two steps produces exactly the same free time as doing it in
+       one — the difference is only that "closed" and "busy" remain separate
+       facts on the way through. */
+    const afterClosures = subtractSpans(open, closures);
+    const free = subtractSpans(afterClosures, taken);
+
+    allHours.push(...open);
+    allAfterClosures.push(...afterClosures);
+    allFree.push(...free);
 
     /* Step 4. */
     for (const span of free) {
@@ -660,7 +718,29 @@ export function computeAvailability(
       staffIds,
     }));
 
-  return { ...empty, slots };
+  const hours = mergeSpans(allHours);
+  const afterClosures = mergeSpans(allAfterClosures);
+  const free = mergeSpans(allFree);
+
+  const shape: DayShape = {
+    hours: hours.map(toShapeSpan),
+    free: free.map(toShapeSpan),
+    /* Open, minus everything closures left standing: time nobody in scope is
+       even rostered for once their time off is taken out. */
+    closed: subtractSpans(hours, afterClosures).map(toShapeSpan),
+    /* What is left of the rostered, unclosed day once free time is removed:
+       appointments and live holds. */
+    busy: subtractSpans(afterClosures, free).map(toShapeSpan),
+  };
+
+  return { ...empty, slots, shape };
+}
+
+function toShapeSpan(span: Span): ShapeSpan {
+  return {
+    startsAt: new Date(span.start).toISOString(),
+    endsAt: new Date(span.end).toISOString(),
+  };
 }
 
 /** The injected clock, in one place so it is obvious there is only one. */
@@ -692,6 +772,17 @@ export interface AvailabilityRequest {
   to: string;
   /** Injected clock. Defaults to the real one; tests always pass their own. */
   now?: Date;
+  /**
+   * One appointment to compute availability AS IF IT WERE NOT THERE.
+   *
+   * The customer's own hold. A hold is a real row and the exclusion constraint
+   * covers it, so it correctly blocks everyone — including the person holding
+   * it. Without this, the moment somebody picks 14:00 the picker would redraw
+   * with 14:00 shown as taken by a stranger, which is both alarming and false.
+   * Ignoring exactly one id, supplied only after the caller has checked the
+   * hold's token, restores the customer's own view of the day.
+   */
+  excludeAppointmentId?: string;
 }
 
 /**
@@ -876,6 +967,9 @@ export async function getAvailability(
               sql`${appointments.holdExpiresAt} > ${clock}`,
             ),
           ),
+          request.excludeAppointmentId
+            ? sql`${appointments.id} <> ${request.excludeAppointmentId}`
+            : undefined,
         ),
       ),
   ]);

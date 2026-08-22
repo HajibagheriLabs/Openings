@@ -268,6 +268,39 @@
   );
 }
 
+/**
+ * A slot somebody else just took, fading to hatched over 240ms.
+ *
+ * The ONE informational animation in the product. A pattern cannot be
+ * cross-faded by `transition-colors`, so it comes up on its own layer. The
+ * reduced-motion rule below collapses it to nothing, which is correct: the
+ * segment still ends up hatched, it just gets there instantly.
+ */
+@keyframes hatch-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@utility hatch-fade-in {
+  animation: hatch-in 240ms ease-out both;
+}
+
+/**
+ * The hold bar depletes LINEARLY and HONESTLY.
+ *
+ * The countdown ticks once a second; this carries the width smoothly between
+ * those steps, at exactly the rate the seconds are passing. `linear` is not a
+ * style choice — an eased bar would be lying about how much time is left in
+ * the middle of every second.
+ */
+@utility hold-bar {
+  transition: width 1000ms linear;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -125,8 +125,30 @@ export function RibbonSegmentView({
   /** Below about two lines there is only room for the time. */
   const compact = height < 34;
 
+  /**
+   * The hatch, as a fading overlay rather than as the element's own
+   * background.
+   *
+   * `transition-colors` cannot cross-fade a repeating-linear-gradient, so a
+   * segment that has just been taken paints the pattern on a layer of its own
+   * and brings that layer up from zero. Only when `justTaken` is set: every
+   * other hatched segment keeps the plain utility class and appears instantly.
+   */
+  const fadingHatch =
+    segment.justTaken && (segment.state === "held" || segment.state === "blocked");
+
   const body = (
     <>
+      {fadingHatch ? (
+        <span
+          aria-hidden="true"
+          className={cn(
+            "pointer-events-none absolute inset-0 hatch-fade-in",
+            segment.state === "blocked" ? "hatch-dense" : "hatch",
+          )}
+        />
+      ) : null}
+
       {segment.state === "selected" &&
       typeof segment.holdRemaining === "number" ? (
         <HoldBar remaining={segment.holdRemaining} />
@@ -159,6 +181,9 @@ export function RibbonSegmentView({
   const shared = cn(
     "absolute inset-x-1 flex items-center overflow-hidden rounded-segment px-2 text-left",
     STATE_CLASSES[segment.state],
+    // The pattern comes from the fading overlay instead, so it is not painted
+    // twice and does not appear before the fade has started.
+    fadingHatch && "bg-none",
     // 45%, whether the segment IS the past or merely happened in it.
     (segment.isPast || segment.state === "past") && "opacity-45",
     // 240ms is the one transition on the ribbon: a slot someone else takes
@@ -213,7 +238,7 @@ function HoldBar({ remaining }: { remaining: number }) {
       className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-accent-contrast/25"
     >
       <span
-        className="block h-full bg-accent-contrast"
+        className="hold-bar block h-full bg-accent-contrast"
         style={{ width: `${clamped * 100}%` }}
       />
     </span>

@@ -4,9 +4,12 @@ import type { RibbonColumn, RibbonSegment } from "@/components/ribbon";
 import { Temporal } from "@/lib/scheduling/temporal";
 
 /**
- * STATIC DEMO DATA, so the Ribbon can be looked at before the availability
- * algorithm exists. Delete this module the day src/lib/scheduling starts
- * producing real segments.
+ * STATIC DEMO DATA for the ADMIN AGENDA only.
+ *
+ * The customer's picker no longer has a demo: it draws real availability and
+ * writes real holds (src/lib/scheduling/day-view.ts). What is left here is the
+ * agenda, which still needs a roster to look at until the admin calendar is
+ * wired to the same loader. Delete this module the day it is.
  *
  * It is nonetheless written the way the real thing will be, because that is
  * the point of building it here: EVERY DATE CALCULATION HAPPENS ON THE SERVER,
@@ -145,57 +148,5 @@ export function buildAdminDemoDay(
         member.id,
       ),
     })),
-  };
-}
-
-/**
- * The customer's picker: one column, one service length, and one slot already
- * held so the depleting bar has something to show.
- *
- * The DAY is real — it is whichever date the visitor chose on the month
- * picker, resolved in the business's zone — and so is the fact of whether that
- * day is today. Only the slots are invented. That split is deliberate: when
- * the real segments arrive, the surrounding page does not change shape.
- */
-export function buildBookingDemoDay(
-  timeZone: string,
-  serviceDurationMin: number,
-  /** A LOCAL calendar date in the business's zone, "2026-09-03". */
-  date: string,
-): DemoDay {
-  const day = Temporal.PlainDate.from(date);
-  const today = Temporal.Now.plainDateISO(timeZone);
-  const isToday = day.equals(today);
-
-  const nowTime = Temporal.Now.plainTimeISO(timeZone);
-  const nowMinute = isToday ? nowTime.hour * 60 + nowTime.minute : null;
-
-  const window = { startMinute: 9 * 60, endMinute: 18 * 60 };
-
-  const spans: DemoSpan[] = [
-    // Nine o'clock has already gone only if the day in question is today.
-    {
-      startHour: 9,
-      durationMin: serviceDurationMin,
-      state: isToday ? "past" : "open",
-    },
-    { startHour: 10, startMinute: 30, durationMin: serviceDurationMin, state: "open" },
-    { startHour: 12, durationMin: 60, state: "booked", label: "Taken" },
-    { startHour: 13, startMinute: 15, durationMin: serviceDurationMin, state: "selected", holdRemaining: 0.62 },
-    { startHour: 15, durationMin: serviceDurationMin, state: "held" },
-    { startHour: 16, startMinute: 30, durationMin: serviceDurationMin, state: "open" },
-  ];
-
-  return {
-    window,
-    nowMinute,
-    dayInstant: instantAt(day, timeZone, window.startMinute),
-    columns: [
-      {
-        id: "any",
-        label: "Chosen day",
-        segments: buildSegments(spans, day, timeZone, "any"),
-      },
-    ],
   };
 }

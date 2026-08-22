@@ -27,6 +27,15 @@ export const EXCLUSION_VIOLATION = "23P01";
  */
 export const FOREIGN_KEY_VIOLATION = "23503";
 
+/**
+ * SQLSTATE 23514 — check_violation.
+ *
+ * `appointments_customer_required_once_booked` is the one that matters: an
+ * appointment may be anonymous only while it is a hold. The database refuses
+ * anything else, so no code path can confirm a booking that belongs to nobody.
+ */
+export const CHECK_VIOLATION = "23514";
+
 interface PostgresErrorShape {
   code?: unknown;
   constraint?: unknown;

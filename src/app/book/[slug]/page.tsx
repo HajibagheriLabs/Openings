@@ -7,15 +7,15 @@ import {
 } from "@/components/booking/booking-choices";
 import { BusinessHeader } from "@/components/booking/business-header";
 import { DateStep } from "@/components/booking/date-step";
-import { DayPicker } from "@/components/booking/day-picker";
 import { NoServices } from "@/components/booking/no-services";
 import { ServiceStep } from "@/components/booking/service-step";
 import { StaffStep } from "@/components/booking/staff-step";
+import { TimeStep } from "@/components/booking/time-step";
 import { formatInstantDate } from "@/components/time-text";
 import { db } from "@/db";
 import { buildBookingFlow } from "@/lib/booking/flow";
 import { ANY_STAFF, bookingUrl, parseBookingQuery } from "@/lib/booking/url";
-import { buildBookingDemoDay } from "@/lib/demo/ribbon-demo";
+import { describeDepositSplit } from "@/lib/money";
 import {
   currentMonthIn,
   loadMonthSummary,
@@ -23,6 +23,11 @@ import {
   monthOf,
   type DayOpenings,
 } from "@/lib/scheduling/month-summary";
+import {
+  loadPickerSnapshot,
+  readHoldFor,
+  resolvePicker,
+} from "@/server/booking/picker";
 import { loadPublicBusiness } from "@/server/queries/booking-page";
 import { loadBookableServices } from "@/server/queries/catalog";
 
@@ -318,12 +323,6 @@ export default async function BookingPage({
     chosen: { service: true, staff: true, date: true },
   });
 
-  const day = buildBookingDemoDay(
-    business.timezone,
-    service.durationMin,
-    selectedDay.date,
-  );
-
   const dateChoice: BookingChoice = {
     value: formatInstantDate(selectedDay.firstStartsAt, business.timezone),
     noun: "day",
@@ -334,19 +333,59 @@ export default async function BookingPage({
     }),
   };
 
+  /**
+   * The day is loaded through the SAME resolver the actions use.
+   *
+   * The picker takes a real hold, so what it draws and what a `takeSlot` post
+   * is checked against have to come from one place — otherwise the screen
+   * could offer a time the action would refuse. `resolvePicker` derives the
+   * business, service and staff from the public slug exactly as the action
+   * does, and `loadPickerSnapshot` builds the same shape the poll returns.
+   */
+  const picker = await resolvePicker({
+    slug,
+    serviceId: service.id,
+    staffId: staffParam ?? null,
+  });
+
+  if (!picker) {
+    redirect(bookingUrl(slug));
+  }
+
+  /* The hold, if this browser is carrying one. Read from an httpOnly cookie
+     during the render, so a refresh mid-hold paints the customer's own slot as
+     theirs on the FIRST frame rather than correcting itself a moment later. */
+  const held = await readHoldFor(slug);
+
+  const picked = await loadPickerSnapshot(
+    picker,
+    selectedDay.date,
+    held
+      ? {
+          appointmentId: held.hold.appointmentId,
+          startsAt: held.hold.startsAt,
+        }
+      : null,
+    held?.hold ?? null,
+  );
+
+  if (!picked) {
+    redirect(bookingUrl(slug));
+  }
+
   return (
-    <DayPicker
-      business={{
-        name: business.name,
-        timezone: business.timezone,
-        currency: business.currency,
-      }}
+    <TimeStep
+      slug={slug}
       service={{
+        id: service.id,
         name: service.name,
         durationMin: service.durationMin,
         priceCents: service.priceCents,
+        depositLine: describeDepositSplit(service, business.currency),
       }}
-      day={day}
+      staffId={staffParam ?? null}
+      currency={business.currency}
+      initial={picked.snapshot}
       step={flow.step}
       totalSteps={flow.total}
       header={header}

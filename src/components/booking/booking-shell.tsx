@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import { ProgressLine } from "@/components/progress-line";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Toaster } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 
 /**
@@ -82,6 +83,11 @@ export function BookingShell({
           </div>
         </div>
       ) : null}
+
+      {/* Toasts are CHROME — the only surface allowed the system-state
+          colours, and never the ribbon. The customer needs them for exactly
+          one thing: a slot going while they are looking at it. */}
+      <Toaster />
     </div>
   );
 }

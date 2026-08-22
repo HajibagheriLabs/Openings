@@ -1,6 +1,11 @@
 import "server-only";
 
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 
 import { and, eq, sql } from "drizzle-orm";
 
@@ -101,6 +106,40 @@ function isExclusionViolation(error: unknown): boolean {
 }
 
 /* ===========================================================================
+   The manage token — the customer's proof that an appointment is theirs
+   =========================================================================== */
+
+/**
+ * SHA-256 of a manage token, hex.
+ *
+ * The row stores only this. The plaintext goes into the customer's manage link
+ * and, for the eight minutes a hold lasts, into an httpOnly cookie — because
+ * "release the slot I am holding" and "cancel my appointment" are the same
+ * question ("is this appointment yours?") asked at two different times, and
+ * inventing a second secret to answer it twice would mean two things to leak
+ * instead of one.
+ */
+export function hashManageToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Constant-time comparison of a presented token against a stored hash.
+ *
+ * `===` on the digests would leak, through timing, how many leading bytes a
+ * guess got right. That is a real attack against a 32-byte secret and it costs
+ * one function call to remove.
+ */
+export function manageTokenMatches(token: string, storedHash: string): boolean {
+  const presented = Buffer.from(hashManageToken(token), "hex");
+  const stored = Buffer.from(storedHash, "hex");
+
+  return (
+    presented.length === stored.length && timingSafeEqual(presented, stored)
+  );
+}
+
+/* ===========================================================================
    Shared SQL
    =========================================================================== */
 
@@ -144,7 +183,14 @@ export interface CreateHoldInput {
   businessId: string;
   staffId: string;
   serviceId: string;
-  customerId: string;
+  /**
+   * NULL for a hold taken from the public picker.
+   *
+   * The slot is reserved the moment a time is tapped, which is before the
+   * customer has typed anything — so there is nobody to point at yet. The
+   * CHECK constraint on the table allows this for `held` and for nothing else.
+   */
+  customerId?: string | null;
   /** Customer-facing start instant. */
   startsAt: Date | string;
   /** Defaults to DEFAULT_HOLD_MINUTES. */
@@ -175,10 +221,49 @@ export async function createHold(
   db: Db,
   input: CreateHoldInput,
 ): Promise<HeldAppointment> {
+  return takeHold(db, input, null);
+}
+
+/**
+ * Move a customer from one held slot to another, ATOMICALLY.
+ *
+ * A customer changing their mind between 14:00 and 15:00 must never be holding
+ * both, and must never briefly be holding neither. Two round trips —
+ * release, then create — can produce both of those: release-then-crash loses
+ * the customer their slot with nothing to show for it, and create-then-release
+ * has them occupying two slots while somebody else is told the day is full. So
+ * both happen in ONE transaction:
+ *
+ *   1. DELETE the previous hold (after checking it is genuinely theirs).
+ *   2. DELETE expired holds colliding with the new range.
+ *   3. INSERT the new hold, and let the constraint arbitrate.
+ *
+ * If step 3 loses the race, the whole transaction rolls back and the customer
+ * still has their ORIGINAL slot — the outcome they would obviously prefer over
+ * being left with nothing because they looked at an alternative.
+ *
+ * Deleting first also lets somebody shuffle WITHIN their own hold — 14:00 to
+ * 14:15 on a 90-minute service overlaps itself, and without step 1 the
+ * constraint would refuse to let a customer move out of their own way.
+ */
+export async function moveHold(
+  db: Db,
+  input: CreateHoldInput,
+  previous: { appointmentId: string; manageToken: string },
+): Promise<HeldAppointment> {
+  return takeHold(db, input, previous);
+}
+
+/** The one implementation behind both entry points above. */
+async function takeHold(
+  db: Db,
+  input: CreateHoldInput,
+  previous: { appointmentId: string; manageToken: string } | null,
+): Promise<HeldAppointment> {
   const holdMinutes = input.holdMinutes ?? DEFAULT_HOLD_MINUTES;
 
   const manageToken = randomBytes(32).toString("base64url");
-  const manageTokenHash = createHash("sha256").update(manageToken).digest("hex");
+  const manageTokenHash = hashManageToken(manageToken);
   const icsUid = `${randomUUID()}@${ICS_UID_DOMAIN}`;
 
   try {
@@ -203,6 +288,14 @@ export async function createHold(
 
       const range = buildBlockingRange(input.startsAt, service);
 
+      // STEP 0 — give back the slot this customer already had, if any. Missing
+      // or not theirs is not an error: the hold may have expired and been
+      // swept while they were deciding, and the thing they actually want is
+      // the new slot.
+      if (previous) {
+        await deleteOwnHold(tx, previous.appointmentId, previous.manageToken);
+      }
+
       // STEP 1 — clear expired holds that would otherwise block us.
       await deleteCollidingExpiredHolds(tx, input.staffId, range.slot);
 
@@ -213,7 +306,7 @@ export async function createHold(
           businessId: input.businessId,
           staffId: input.staffId,
           serviceId: input.serviceId,
-          customerId: input.customerId,
+          customerId: input.customerId ?? null,
           slot: range.slot,
           startsAt: range.startsAt,
           endsAt: range.endsAt,
@@ -245,6 +338,43 @@ export async function createHold(
     }
     throw error;
   }
+}
+
+/**
+ * Delete a held row, but only if the presented token really owns it.
+ *
+ * Returns whether anything went. Reads the row first because the check is a
+ * constant-time comparison in Node rather than a SQL equality — see
+ * `manageTokenMatches`.
+ */
+async function deleteOwnHold(
+  tx: Parameters<Parameters<Db["transaction"]>[0]>[0],
+  appointmentId: string,
+  manageToken: string,
+): Promise<boolean> {
+  const [row] = await tx
+    .select({
+      id: appointments.id,
+      manageTokenHash: appointments.manageTokenHash,
+    })
+    .from(appointments)
+    .where(
+      and(eq(appointments.id, appointmentId), eq(appointments.status, "held")),
+    )
+    .limit(1);
+
+  if (!row || !manageTokenMatches(manageToken, row.manageTokenHash)) {
+    return false;
+  }
+
+  const deleted = await tx
+    .delete(appointments)
+    .where(
+      and(eq(appointments.id, appointmentId), eq(appointments.status, "held")),
+    )
+    .returning({ id: appointments.id });
+
+  return deleted.length > 0;
 }
 
 /**
@@ -385,6 +515,81 @@ export async function releaseHold(
     .returning({ id: appointments.id });
 
   return released.length > 0;
+}
+
+/**
+ * Release a hold on the strength of the customer's own token.
+ *
+ * The public picker is an unauthenticated endpoint, so `releaseHold` above —
+ * which takes an id and asks no questions — must never be reachable from it.
+ * An appointment id is a UUID and therefore unguessable in practice, but "in
+ * practice" is not a security model: with only an id, anything that ever
+ * leaked one (a log line, a shared screenshot, a Referer header) would hand
+ * over the ability to cancel other people's slots.
+ *
+ * Returns false for a hold that is missing, already gone, or not theirs — all
+ * three are the same answer to the caller, and distinguishing them out loud
+ * would turn this into an oracle for which ids exist.
+ */
+export async function releaseHoldByToken(
+  db: Db,
+  appointmentId: string,
+  manageToken: string,
+): Promise<boolean> {
+  return db.transaction((tx) =>
+    deleteOwnHold(tx, appointmentId, manageToken),
+  );
+}
+
+/**
+ * A hold's live state, for a page that has to render a countdown against it.
+ *
+ * Returns null when the row is gone or is not theirs. `expiresAt` comes
+ * straight off the row, so the client counts down against the DATABASE's
+ * deadline rather than against a duration it was told once and has been
+ * guessing from ever since.
+ */
+export async function readOwnHold(
+  db: Db,
+  appointmentId: string,
+  manageToken: string,
+): Promise<{
+  id: string;
+  startsAt: Date;
+  endsAt: Date;
+  staffId: string;
+  serviceId: string;
+  expiresAt: Date | null;
+} | null> {
+  const [row] = await db
+    .select({
+      id: appointments.id,
+      startsAt: appointments.startsAt,
+      endsAt: appointments.endsAt,
+      staffId: appointments.staffId,
+      serviceId: appointments.serviceId,
+      expiresAt: appointments.holdExpiresAt,
+      manageTokenHash: appointments.manageTokenHash,
+    })
+    .from(appointments)
+    .where(
+      and(eq(appointments.id, appointmentId), eq(appointments.status, "held")),
+    )
+    .limit(1);
+
+  if (!row || !manageTokenMatches(manageToken, row.manageTokenHash)) {
+    return null;
+  }
+
+  // The hash never leaves this module; the caller gets the facts only.
+  return {
+    id: row.id,
+    startsAt: row.startsAt,
+    endsAt: row.endsAt,
+    staffId: row.staffId,
+    serviceId: row.serviceId,
+    expiresAt: row.expiresAt,
+  };
 }
 
 /**

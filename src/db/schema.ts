@@ -1,6 +1,7 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   boolean,
+  check,
   customType,
   date,
   index,
@@ -466,9 +467,22 @@ export const appointments = pgTable(
     serviceId: uuid("service_id")
       .notNull()
       .references(() => services.id, { onDelete: "restrict" }),
-    customerId: uuid("customer_id")
-      .notNull()
-      .references(() => customers.id, { onDelete: "restrict" }),
+    /**
+     * NULL WHILE THE APPOINTMENT IS ONLY HELD.
+     *
+     * A hold is written the instant a customer taps a time, which is before
+     * they have typed their name — the slot has to be genuinely reserved while
+     * they fill the form in, or the form is a lie. There is no customer to
+     * point at yet, and inventing a placeholder row would poison the customers
+     * table (which is deduped by email) with junk that outlives the hold.
+     *
+     * The CHECK constraint below is what keeps this honest: only a `held` row
+     * may have no customer. Anything confirmed, completed, cancelled or marked
+     * no-show has one, so no query downstream has to wonder.
+     */
+    customerId: uuid("customer_id").references(() => customers.id, {
+      onDelete: "restrict",
+    }),
 
     /**
      * THE BLOCKING INTERVAL — and the reason this product is correct.
@@ -563,6 +577,16 @@ export const appointments = pgTable(
     index("appointments_slot_gist_idx").using("gist", t.slot),
     index("appointments_customer_id_idx").on(t.customerId),
     index("appointments_service_id_idx").on(t.serviceId),
+    /**
+     * An anonymous appointment is a HOLD and nothing else. See the note on
+     * `customer_id`. Enforced by the database rather than by convention,
+     * because the moment it is only a convention some code path will confirm
+     * an appointment that belongs to nobody.
+     */
+    check(
+      "appointments_customer_required_once_booked",
+      sql`${t.status} = 'held' OR ${t.customerId} IS NOT NULL`,
+    ),
   ],
 );
 

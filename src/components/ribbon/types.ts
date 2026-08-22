@@ -92,6 +92,19 @@ export interface RibbonSegment {
 
   /** Blocks interaction without implying the slot is gone. */
   disabled?: boolean;
+
+  /**
+   * This span JUST changed under the visitor's eyes — somebody else booked it
+   * while they were looking at it.
+   *
+   * The hatch fades in over 240ms instead of appearing, which is the one
+   * animation the ribbon is allowed and the only one in the product that
+   * carries information: a slot that snaps from open to hatched looks like a
+   * rendering glitch, while a slot that fades looks like what it is, which is
+   * something that just happened. Off by default, so the admin agenda and the
+   * first paint of a picker stay completely still.
+   */
+  justTaken?: boolean;
 }
 
 /**
