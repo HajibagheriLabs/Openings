@@ -211,6 +211,13 @@ export const businesses = pgTable("businesses", {
   /** Public URL segment: /book/[slug]. */
   slug: text("slug").notNull().unique(),
   /**
+   * One line under the name on the public booking page — "Family dentistry in
+   * Kreuzberg, since 2009". Owner-authored, optional, and rendered only when
+   * it is there: an absent sentence is an absent sentence, not a placeholder.
+   * Set from the settings screen, alongside `address` below.
+   */
+  description: text("description"),
+  /**
    * IANA timezone identifier, e.g. "Europe/Berlin". NEVER a fixed offset like
    * "+02:00" — an offset cannot survive a DST transition, and every scheduling
    * expansion in src/lib/scheduling reads this column to know which local

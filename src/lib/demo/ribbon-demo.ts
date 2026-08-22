@@ -77,10 +77,14 @@ function buildSegments(
 export interface DemoDay {
   window: { startMinute: number; endMinute: number };
   columns: RibbonColumn[];
-  /** Minutes since local midnight, in the business's zone. */
-  nowMinute: number;
-  /** Today, in the business's zone, as an instant — for date headings. */
-  todayInstant: string;
+  /**
+   * Minutes since local midnight, in the business's zone — where the now line
+   * goes. NULL on a day that is not today, because there is no "now" on a
+   * Thursday next month and drawing one would be a line across a lie.
+   */
+  nowMinute: number | null;
+  /** The day being shown, as an instant, for date headings. */
+  dayInstant: string;
 }
 
 /**
@@ -129,7 +133,7 @@ export function buildAdminDemoDay(
   return {
     window,
     nowMinute,
-    todayInstant: instantAt(today, timeZone, nowMinute),
+    dayInstant: instantAt(today, timeZone, nowMinute),
     columns: staff.map((member, index) => ({
       id: member.id,
       label: member.name,
@@ -147,19 +151,34 @@ export function buildAdminDemoDay(
 /**
  * The customer's picker: one column, one service length, and one slot already
  * held so the depleting bar has something to show.
+ *
+ * The DAY is real — it is whichever date the visitor chose on the month
+ * picker, resolved in the business's zone — and so is the fact of whether that
+ * day is today. Only the slots are invented. That split is deliberate: when
+ * the real segments arrive, the surrounding page does not change shape.
  */
 export function buildBookingDemoDay(
   timeZone: string,
   serviceDurationMin: number,
+  /** A LOCAL calendar date in the business's zone, "2026-09-03". */
+  date: string,
 ): DemoDay {
+  const day = Temporal.PlainDate.from(date);
   const today = Temporal.Now.plainDateISO(timeZone);
+  const isToday = day.equals(today);
+
   const nowTime = Temporal.Now.plainTimeISO(timeZone);
-  const nowMinute = nowTime.hour * 60 + nowTime.minute;
+  const nowMinute = isToday ? nowTime.hour * 60 + nowTime.minute : null;
 
   const window = { startMinute: 9 * 60, endMinute: 18 * 60 };
 
   const spans: DemoSpan[] = [
-    { startHour: 9, durationMin: serviceDurationMin, state: "past" },
+    // Nine o'clock has already gone only if the day in question is today.
+    {
+      startHour: 9,
+      durationMin: serviceDurationMin,
+      state: isToday ? "past" : "open",
+    },
     { startHour: 10, startMinute: 30, durationMin: serviceDurationMin, state: "open" },
     { startHour: 12, durationMin: 60, state: "booked", label: "Taken" },
     { startHour: 13, startMinute: 15, durationMin: serviceDurationMin, state: "selected", holdRemaining: 0.62 },
@@ -170,12 +189,12 @@ export function buildBookingDemoDay(
   return {
     window,
     nowMinute,
-    todayInstant: instantAt(today, timeZone, nowMinute),
+    dayInstant: instantAt(day, timeZone, window.startMinute),
     columns: [
       {
         id: "any",
-        label: "Today",
-        segments: buildSegments(spans, today, timeZone, "any"),
+        label: "Chosen day",
+        segments: buildSegments(spans, day, timeZone, "any"),
       },
     ],
   };

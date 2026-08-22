@@ -111,6 +111,49 @@ export function describeDeposit(
   }
 }
 
+/**
+ * What the customer actually pays, and when: "£15 deposit, £45 on the day".
+ *
+ * Deliberately different from `describeDeposit` above, which is for the OWNER
+ * setting a policy and therefore names the policy ("20% deposit (£9.00)"). A
+ * customer does not care that the number came from a percentage; they care
+ * what leaves their account now and what they bring with them. Two audiences,
+ * two sentences, one calculation underneath.
+ *
+ * Returns null when there is no deposit — an absent fact rather than the word
+ * "none", so the caller can simply omit the line.
+ */
+export function describeDepositSplit(
+  service: {
+    priceCents: number;
+    depositType: "none" | "flat" | "percent";
+    depositValue: number;
+  },
+  currency: string,
+  locale: string = DEFAULT_MONEY_LOCALE,
+): string | null {
+  const deposit = depositCentsFor(service);
+
+  if (deposit <= 0) {
+    return null;
+  }
+
+  const balance = service.priceCents - deposit;
+
+  /* A deposit equal to the price is not a deposit, it is the bill. Saying
+     "£45 deposit, £0 on the day" invites the reader to work out that there is
+     nothing left, which is a question they should never have been asked. */
+  if (balance <= 0) {
+    return `${formatCents(deposit, currency, locale)} paid now`;
+  }
+
+  return `${formatCents(deposit, currency, locale)} deposit, ${formatCents(
+    balance,
+    currency,
+    locale,
+  )} on the day`;
+}
+
 /** ISO 4217 codes offered during onboarding. Editable later in settings. */
 export const CURRENCIES = [
   { code: "EUR", label: "Euro" },

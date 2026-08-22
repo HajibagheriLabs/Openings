@@ -15,19 +15,29 @@ import { cn } from "@/lib/utils";
  * The summary bar is sticky at the BOTTOM on mobile, where a thumb is, and it
  * is one of the few surfaces allowed --shadow-float, because it genuinely
  * floats over the scrolling column.
+ *
+ * Every step renders its own shell. The `header` and `choices` slots take
+ * SERVER-RENDERED nodes, which is what lets the two steps that need client
+ * state — the calendar, and the time picker with its hold countdown — sit
+ * inside the same frame as the two that do not without dragging the business
+ * header into the browser bundle.
  */
 export function BookingShell({
-  businessName,
   step,
   totalSteps,
+  header,
+  choices,
   summary,
   children,
   className,
 }: {
-  businessName: string;
   /** 1-based. Omit both to hide the progress line on a landing screen. */
   step?: number;
   totalSteps?: number;
+  /** The business: name, description, address, timezone. */
+  header?: ReactNode;
+  /** What has been chosen so far, each piece changeable. */
+  choices?: ReactNode;
   /** The sticky bar. Typically the chosen time, the price, and one button. */
   summary?: ReactNode;
   children: ReactNode;
@@ -47,20 +57,21 @@ export function BookingShell({
         />
       ) : null}
 
-      <header className="mx-auto flex w-full max-w-[560px] items-center justify-between gap-4 px-5 pt-6">
-        <p className="type-label truncate">{businessName}</p>
+      <div className="mx-auto flex w-full max-w-[560px] justify-end px-5 pt-4">
         <ThemeToggle />
-      </header>
+      </div>
 
       <main
         className={cn(
-          "mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-8 px-5 pt-6",
+          "mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-8 px-5 pt-2",
           // Room for the sticky bar, so the last control is never trapped
           // underneath it.
           summary ? "pb-40" : "pb-12",
           className,
         )}
       >
+        {header}
+        {choices}
         {children}
       </main>
 

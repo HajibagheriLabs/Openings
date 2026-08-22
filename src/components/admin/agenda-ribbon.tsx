@@ -31,20 +31,23 @@ export function AgendaRibbon({
   window: RibbonWindow;
   columns: RibbonColumn[];
   timeZone: string;
-  nowMinute: number;
+  /** Null on a day that is not today — there is no now line to draw on it. */
+  nowMinute: number | null;
 }) {
   const ribbon = useRef<RibbonHandle>(null);
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex justify-end">
-        <PillButton
-          variant="secondary"
-          size="sm"
-          onClick={() => ribbon.current?.scrollNowIntoView()}
-        >
-          Jump to now
-        </PillButton>
+        {typeof nowMinute === "number" ? (
+          <PillButton
+            variant="secondary"
+            size="sm"
+            onClick={() => ribbon.current?.scrollNowIntoView()}
+          >
+            Jump to now
+          </PillButton>
+        ) : null}
       </div>
 
       <Ribbon

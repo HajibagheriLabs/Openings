@@ -60,7 +60,7 @@ export default async function AdminTodayPage() {
     <div className="flex flex-col gap-8">
       <PageHeader
         eyebrow="Today"
-        title={formatInstantDate(day.todayInstant, business.timezone)}
+        title={formatInstantDate(day.dayInstant, business.timezone)}
         description="Time is drawn to scale, so a 90-minute appointment takes up three times the space of a 30-minute one. Booked time is carved out of the day rather than stacked on top of it."
       />
 

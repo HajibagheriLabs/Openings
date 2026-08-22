@@ -1,9 +1,10 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useState } from "react";
 
 import { BookingShell } from "@/components/booking/booking-shell";
-import { DurationChip } from "@/components/duration-chip";
+import { StepHeading } from "@/components/booking/step-heading";
 import { PillButton } from "@/components/pill-button";
 import {
   isDatedSegment,
@@ -14,6 +15,7 @@ import {
   type RibbonWindow,
 } from "@/components/ribbon";
 import {
+  formatDuration,
   formatInstantDate,
   formatInstantRange,
   TimeText,
@@ -21,28 +23,41 @@ import {
 import { formatCents } from "@/lib/money";
 
 /**
- * Choosing a time.
+ * Step 4 — which time.
  *
- * NO BOOKING LOGIC LIVES HERE YET. Selecting a segment moves a local piece of
- * state and nothing else — it writes no hold, starts no countdown, and reserves
- * nothing. When holds land, `onSelectSegment` calls a Server Action, the
- * returned hold's remaining fraction feeds `holdRemaining` on the segment, and
- * the depleting bar the Ribbon already knows how to draw starts moving. The
+ * THE SEGMENTS ARE STILL DEMO DATA. The day, the service, the staff member and
+ * the business's timezone are all real and all resolved on the server; what is
+ * not yet real is the list of free slots inside the chosen day, which is the
+ * work the holds land with. Selecting a segment moves a local piece of state
+ * and nothing else — it writes no hold, starts no countdown, and reserves
+ * nothing.
+ *
+ * When holds arrive, `onSelectSegment` calls a Server Action, the returned
+ * hold's remaining fraction feeds `holdRemaining` on the segment, and the
+ * depleting bar the Ribbon already knows how to draw starts moving. The
  * component below does not change shape for that.
  */
 export function DayPicker({
   business,
   service,
   day,
+  step,
+  totalSteps,
+  header,
+  choices,
 }: {
   business: { name: string; timezone: string; currency: string };
   service: { name: string; durationMin: number; priceCents: number };
   day: {
     window: RibbonWindow;
     columns: RibbonColumn[];
-    nowMinute: number;
-    todayInstant: string;
+    nowMinute: number | null;
+    dayInstant: string;
   };
+  step: number;
+  totalSteps: number;
+  header: ReactNode;
+  choices: ReactNode;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(
     // The demo day ships with one slot already held, so the summary bar and the
@@ -85,11 +100,14 @@ export function DayPicker({
     setSelectedId((current) => (current === segment.id ? null : segment.id));
   }
 
+  const dayLabel = formatInstantDate(day.dayInstant, business.timezone);
+
   return (
     <BookingShell
-      businessName={business.name}
-      step={2}
-      totalSteps={4}
+      step={step}
+      totalSteps={totalSteps}
+      header={header}
+      choices={choices}
       summary={
         selected ? (
           <div className="flex flex-wrap items-center justify-between gap-4">
@@ -113,27 +131,17 @@ export function DayPicker({
         )
       }
     >
-      <header className="flex flex-col gap-3">
-        <h1 className="type-page-title text-ink">Pick a time</h1>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <span className="type-section text-ink">{service.name}</span>
-          <DurationChip minutes={service.durationMin} />
-          <span className="type-time text-ink-muted">
-            {formatCents(service.priceCents, business.currency)}
-          </span>
-        </div>
-
-        <p className="type-body text-ink-muted">
-          Times are shown in {business.timezone.replace(/_/g, " ")}. Choosing one
-          holds it for 8 minutes while you fill in your details.
-        </p>
-      </header>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="type-section text-ink">
-          {formatInstantDate(day.todayInstant, business.timezone)}
-        </h2>
+      <section className="flex flex-col gap-5">
+        <StepHeading
+          eyebrow="Time"
+          title="Pick a time"
+          description={`${dayLabel}. ${service.name}, ${formatDuration(
+            service.durationMin,
+          )}, ${formatCents(
+            service.priceCents,
+            business.currency,
+          )}. Choosing a time holds it for 8 minutes while you fill in your details.`}
+        />
 
         <Ribbon
           window={day.window}
@@ -142,10 +150,7 @@ export function DayPicker({
           nowMinute={day.nowMinute}
           onSelectSegment={choose}
           hideColumnHeaders
-          ariaLabel={`Times available on ${formatInstantDate(
-            day.todayInstant,
-            business.timezone,
-          )}`}
+          ariaLabel={`Times available on ${dayLabel}`}
         />
       </section>
 
