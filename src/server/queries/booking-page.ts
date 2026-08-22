@@ -30,6 +30,9 @@ export interface PublicBusiness {
   slotGranularityMin: number;
   minLeadTimeMin: number;
   maxAdvanceDays: number;
+  /** Cancellations are refused inside this many hours. Stated on the form. */
+  cancellationWindowHours: number;
+  allowReschedule: boolean;
 }
 
 /**
@@ -56,6 +59,8 @@ export async function loadPublicBusiness(
       slotGranularityMin: businesses.slotGranularityMin,
       minLeadTimeMin: businesses.minLeadTimeMin,
       maxAdvanceDays: businesses.maxAdvanceDays,
+      cancellationWindowHours: businesses.cancellationWindowHours,
+      allowReschedule: businesses.allowReschedule,
     })
     .from(businesses)
     .where(eq(businesses.slug, slug))

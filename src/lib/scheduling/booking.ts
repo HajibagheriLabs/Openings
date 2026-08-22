@@ -11,7 +11,13 @@ import { and, eq, sql } from "drizzle-orm";
 
 import type { Db } from "@/db/client";
 import { EXCLUSION_VIOLATION, findPostgresError } from "@/db/errors";
-import { appointments, services, type Appointment } from "@/db/schema";
+import {
+  appointments,
+  customers,
+  notifications,
+  services,
+  type Appointment,
+} from "@/db/schema";
 
 import { buildBlockingRange, type BlockingRange } from "./slot";
 
@@ -560,6 +566,9 @@ export async function readOwnHold(
   staffId: string;
   serviceId: string;
   expiresAt: Date | null;
+  /** Snapshotted when the hold was written. The authority on what is owed. */
+  priceCents: number;
+  depositCents: number;
 } | null> {
   const [row] = await db
     .select({
@@ -569,6 +578,8 @@ export async function readOwnHold(
       staffId: appointments.staffId,
       serviceId: appointments.serviceId,
       expiresAt: appointments.holdExpiresAt,
+      priceCents: appointments.priceCents,
+      depositCents: appointments.depositCents,
       manageTokenHash: appointments.manageTokenHash,
     })
     .from(appointments)
@@ -589,7 +600,185 @@ export async function readOwnHold(
     staffId: row.staffId,
     serviceId: row.serviceId,
     expiresAt: row.expiresAt,
+    priceCents: row.priceCents,
+    depositCents: row.depositCents,
   };
+}
+
+/* ===========================================================================
+   Claim a hold — attach the customer, and confirm it if nothing is owed
+   =========================================================================== */
+
+export interface ClaimHoldInput {
+  appointmentId: string;
+  /** Proof the hold is this browser's. Checked in constant time. */
+  manageToken: string;
+  businessId: string;
+  customer: { name: string; email: string; phone: string | null };
+  customerNote: string | null;
+  /** When the cancellation policy was ticked. */
+  policyAcceptedAt: Date;
+  /**
+   * True when the deposit is zero and there is nothing to pay.
+   *
+   * A FREE CONSULTATION IS CONFIRMED HERE AND NOW. Sending somebody to a
+   * payment page for nought pounds, or worse leaving them holding a slot that
+   * expires while they wait for a step that has nothing to do, is how a
+   * perfectly good business gets treated as an edge case. The whole booking
+   * finishes in this transaction.
+   */
+  confirmNow: boolean;
+}
+
+export type ClaimHoldResult =
+  | { ok: true; appointment: Appointment; customerId: string }
+  /** The hold was swept or released between the checks and the write. */
+  | { ok: false; reason: "hold-gone" };
+
+/**
+ * Put a name to a hold, and finish the booking if there is nothing to pay.
+ *
+ * ONE TRANSACTION, THREE WRITES. The customer is found or created, the
+ * appointment is claimed, and — when nothing is owed — the outbox row for the
+ * confirmation email is written. Either all three land or none do, which is
+ * what stops the two failure modes that matter: a confirmed appointment nobody
+ * is ever told about, and a customer row created for a booking that never
+ * happened.
+ *
+ * The email is NOT sent here. It is a row in `notifications` that a worker
+ * picks up, so a Resend outage cannot roll back a confirmed appointment.
+ */
+export async function claimHold(
+  db: Db,
+  input: ClaimHoldInput,
+): Promise<ClaimHoldResult> {
+  return db.transaction(async (tx) => {
+    /* The hold has to still be ours. Read first because the token comparison
+       is constant-time in Node rather than a SQL equality — see
+       `manageTokenMatches`. */
+    const [held] = await tx
+      .select({
+        id: appointments.id,
+        manageTokenHash: appointments.manageTokenHash,
+      })
+      .from(appointments)
+      .where(
+        and(
+          eq(appointments.id, input.appointmentId),
+          eq(appointments.status, "held"),
+        ),
+      )
+      .limit(1);
+
+    if (!held || !manageTokenMatches(input.manageToken, held.manageTokenHash)) {
+      return { ok: false, reason: "hold-gone" as const };
+    }
+
+    /**
+     * FIND OR CREATE, NEVER DUPLICATE.
+     *
+     * `customers` is unique on (business_id, email), and this leans on that
+     * index rather than on a SELECT followed by an INSERT — which is the same
+     * race as checking a slot before booking it, and loses the same way under
+     * two concurrent submits from the same person. The database arbitrates.
+     *
+     * The name always takes the new value: they just typed it, and a person
+     * who married since their last haircut is right and the old row is wrong.
+     * The phone only overwrites when one was given, so leaving the optional
+     * field blank does not quietly delete the number they gave last time.
+     */
+    const [customer] = await tx
+      .insert(customers)
+      .values({
+        businessId: input.businessId,
+        name: input.customer.name,
+        email: input.customer.email,
+        phone: input.customer.phone,
+      })
+      .onConflictDoUpdate({
+        target: [customers.businessId, customers.email],
+        set: {
+          name: sql`excluded.name`,
+          phone: sql`coalesce(excluded.phone, ${customers.phone})`,
+        },
+      })
+      .returning({ id: customers.id });
+
+    /**
+     * Claim it.
+     *
+     * `WHERE status = 'held'` is the second half of the check above: if
+     * anything swept the row between the two statements, zero rows update and
+     * the whole transaction rolls back rather than half-claiming a booking.
+     *
+     * No sweep of colliding expired holds is needed here, unlike every INSERT
+     * in this module. The row's range is not changing, and it is already in
+     * the constraint's index — nothing overlapping it can exist, or it could
+     * not have been inserted in the first place.
+     */
+    const [appointment] = await tx
+      .update(appointments)
+      .set({
+        customerId: customer.id,
+        customerNote: input.customerNote,
+        policyAcceptedAt: input.policyAcceptedAt,
+        ...(input.confirmNow
+          ? { status: "confirmed" as const, holdExpiresAt: null }
+          : {}),
+      })
+      .where(
+        and(
+          eq(appointments.id, input.appointmentId),
+          eq(appointments.status, "held"),
+        ),
+      )
+      .returning();
+
+    if (!appointment) {
+      return { ok: false, reason: "hold-gone" as const };
+    }
+
+    if (input.confirmNow) {
+      /* The outbox. Due immediately; a worker sends it. Writing it inside the
+         transaction is what guarantees a confirmed appointment always has a
+         confirmation queued against it. */
+      await tx.insert(notifications).values({
+        appointmentId: appointment.id,
+        kind: "confirmation",
+        channel: "email",
+        toEmail: input.customer.email,
+        scheduledFor: new Date(),
+      });
+    }
+
+    return { ok: true, appointment, customerId: customer.id };
+  });
+}
+
+/**
+ * One appointment, whatever its status, if the token proves it is theirs.
+ *
+ * `readOwnHold` deliberately matches only `held`, because everything the
+ * picker does is about a live hold. This is the other question — "show me the
+ * booking I just made" — and it has to see a `confirmed` row. Same token, same
+ * constant-time comparison; the only difference is which statuses count.
+ */
+export async function readOwnAppointment(
+  db: Db,
+  appointmentId: string,
+  manageToken: string,
+): Promise<Appointment | null> {
+  const [row] = await db
+    .select()
+    .from(appointments)
+    .where(eq(appointments.id, appointmentId))
+    .limit(1);
+
+  if (!row || !manageTokenMatches(manageToken, row.manageTokenHash)) {
+    return null;
+  }
+
+  return row;
 }
 
 /**

@@ -6,7 +6,10 @@ import {
   type BookingChoice,
 } from "@/components/booking/booking-choices";
 import { BusinessHeader } from "@/components/booking/business-header";
+import { ConfirmedStep } from "@/components/booking/confirmed-step";
 import { DateStep } from "@/components/booking/date-step";
+import { DetailsStep } from "@/components/booking/details-step";
+import { HoldGone } from "@/components/booking/hold-gone";
 import { NoServices } from "@/components/booking/no-services";
 import { ServiceStep } from "@/components/booking/service-step";
 import { StaffStep } from "@/components/booking/staff-step";
@@ -15,7 +18,7 @@ import { formatInstantDate } from "@/components/time-text";
 import { db } from "@/db";
 import { buildBookingFlow } from "@/lib/booking/flow";
 import { ANY_STAFF, bookingUrl, parseBookingQuery } from "@/lib/booking/url";
-import { describeDepositSplit } from "@/lib/money";
+import { depositCentsFor, describeDepositSplit } from "@/lib/money";
 import {
   currentMonthIn,
   loadMonthSummary,
@@ -23,6 +26,10 @@ import {
   monthOf,
   type DayOpenings,
 } from "@/lib/scheduling/month-summary";
+import {
+  loadConfirmedBooking,
+  loadDetailsContext,
+} from "@/server/booking/details";
 import {
   loadPickerSnapshot,
   readHoldFor,
@@ -131,6 +138,24 @@ export default async function BookingPage({
   const query = parseBookingQuery(await searchParams);
 
   /* ---------------------------------------------------------------------
+     Booked — checked first, because it is the one screen that does not
+     depend on anything in the URL beyond the slug. The appointment comes
+     from the cookie the hold left behind.
+  --------------------------------------------------------------------- */
+
+  if (query.step === "booked") {
+    const booking = await loadConfirmedBooking(slug);
+
+    if (booking) {
+      return <ConfirmedStep booking={booking} slug={slug} header={header} />;
+    }
+
+    /* No cookie, or it points at something that is not a confirmed booking of
+       theirs. Fall through to the picker rather than showing an error: from
+       here, "we cannot show you that" and "start again" are the same thing. */
+  }
+
+  /* ---------------------------------------------------------------------
      Step 1 — the service
   --------------------------------------------------------------------- */
 
@@ -156,7 +181,13 @@ export default async function BookingPage({
     const flow = buildBookingFlow({
       serviceCount: services.length,
       staffCount: widestTeam,
-      chosen: { service: false, staff: false, date: false },
+      /* Before a service is chosen, assume the longest flow: if ANY bookable
+         service asks for a deposit the line may have a payment step, and a
+         progress line that shrinks is better than one that grows. */
+      hasDeposit: services.some(
+        (candidate) => depositCentsFor(candidate) > 0,
+      ),
+      chosen: { service: false, staff: false, date: false, time: false },
     });
 
     return (
@@ -170,6 +201,10 @@ export default async function BookingPage({
       />
     );
   }
+
+  /* The deposit this service asks for, worked out once. It decides whether the
+     flow has a payment step at all — see the note in buildBookingFlow. */
+  const depositCents = depositCentsFor(service);
 
   const serviceChoice: BookingChoice | null =
     services.length > 1
@@ -195,7 +230,8 @@ export default async function BookingPage({
     const flow = buildBookingFlow({
       serviceCount: services.length,
       staffCount: team.length,
-      chosen: { service: true, staff: false, date: false },
+      hasDeposit: depositCents > 0,
+      chosen: { service: true, staff: false, date: false, time: false },
     });
 
     return (
@@ -279,7 +315,8 @@ export default async function BookingPage({
     const flow = buildBookingFlow({
       serviceCount: services.length,
       staffCount: team.length,
-      chosen: { service: true, staff: true, date: false },
+      hasDeposit: depositCents > 0,
+      chosen: { service: true, staff: true, date: false, time: false },
     });
 
     return (
@@ -320,7 +357,8 @@ export default async function BookingPage({
   const flow = buildBookingFlow({
     serviceCount: services.length,
     staffCount: team.length,
-    chosen: { service: true, staff: true, date: true },
+    hasDeposit: depositCents > 0,
+    chosen: { service: true, staff: true, date: true, time: false },
   });
 
   const dateChoice: BookingChoice = {
@@ -373,6 +411,66 @@ export default async function BookingPage({
     redirect(bookingUrl(slug));
   }
 
+  /* ---------------------------------------------------------------------
+     Step 5 — the details, and the policy layer behind them
+  --------------------------------------------------------------------- */
+
+  const pickerHref = bookingUrl(slug, {
+    service: service.id,
+    staff: staffParam,
+    date: selectedDay.date,
+    month: summary.month,
+  });
+
+  if (query.step === "details") {
+    /**
+     * The form is rendered from the HOLD, not from the URL.
+     *
+     * `loadDetailsContext` answers the same two questions the submit answers
+     * first — is the hold live and theirs, and are the service and staff
+     * member still active — so what is on screen and what will be enforced
+     * come from one resolution. A refusal here is not an error page: it is the
+     * plain sentence and one way back.
+     */
+    const details = await loadDetailsContext(slug, now);
+
+    if (!details.ok) {
+      return (
+        <HoldGone
+          refusal={details.refusal}
+          backHref={pickerHref}
+          header={header}
+        />
+      );
+    }
+
+    const detailsFlow = buildBookingFlow({
+      serviceCount: services.length,
+      staffCount: team.length,
+      hasDeposit: details.context.hold.depositCents > 0,
+      chosen: { service: true, staff: true, date: true, time: true },
+    });
+
+    return (
+      <DetailsStep
+        slug={slug}
+        summary={details.context.summary}
+        hold={details.context.snapshot}
+        backHref={pickerHref}
+        step={detailsFlow.step}
+        totalSteps={detailsFlow.total}
+        header={header}
+        choices={
+          <BookingChoices
+            choices={[serviceChoice, staffChoice, dateChoice].filter(
+              (choice): choice is BookingChoice => choice !== null,
+            )}
+          />
+        }
+      />
+    );
+  }
+
   return (
     <TimeStep
       slug={slug}
@@ -386,6 +484,13 @@ export default async function BookingPage({
       staffId={staffParam ?? null}
       currency={business.currency}
       initial={picked.snapshot}
+      detailsHref={bookingUrl(slug, {
+        service: service.id,
+        staff: staffParam,
+        date: selectedDay.date,
+        month: summary.month,
+        step: "details",
+      })}
       step={flow.step}
       totalSteps={flow.total}
       header={header}

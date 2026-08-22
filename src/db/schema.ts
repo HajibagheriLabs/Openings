@@ -553,6 +553,20 @@ export const appointments = pgTable(
 
     /** Written by the customer at booking. Shown to the business. */
     customerNote: text("customer_note"),
+
+    /**
+     * When the customer ticked the cancellation policy, and NULL when nobody
+     * did.
+     *
+     * A hold has none — the slot is reserved before the form is opened. A
+     * booking the owner enters by hand has none either, because the person who
+     * agreed to the policy in that case was standing at the counter. What this
+     * column is for is the third case: a customer who booked themselves and
+     * later says they were never told the window. The policy text is on the
+     * page, in plain words, never behind a link, and this is the timestamp
+     * that says they saw it.
+     */
+    policyAcceptedAt: timestamp("policy_accepted_at", { withTimezone: true }),
     /** Written by the business. Never shown to the customer. */
     internalNote: text("internal_note"),
 

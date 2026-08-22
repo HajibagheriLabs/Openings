@@ -30,7 +30,25 @@ export const BOOKING_PARAM = {
   staff: "staff",
   date: "date",
   month: "month",
+  step: "step",
 } as const;
+
+/**
+ * The two screens that are not a CHOICE and therefore cannot be inferred.
+ *
+ * Everything else about which step to render falls out of what has been
+ * answered: a service in the URL means the service step is done. Filling in
+ * your details is different — the answer to "which time" is a hold, and a hold
+ * lives in a cookie rather than the URL, so nothing in the address would
+ * otherwise distinguish "still choosing a time" from "moved on to the form".
+ *
+ * `booked` is the same shape of fact: the appointment is confirmed, and the
+ * address should say so rather than leaving a refresh to land back on a picker
+ * for a slot that is no longer for sale.
+ */
+export const BOOKING_STEP_PARAM = ["details", "booked"] as const;
+
+export type BookingStepParam = (typeof BOOKING_STEP_PARAM)[number];
 
 /**
  * The staff value meaning "whoever is free".
@@ -51,6 +69,7 @@ const serviceSchema = z.uuid();
 const staffSchema = z.union([z.literal(ANY_STAFF), z.uuid()]);
 const dateSchema = z.string().regex(LOCAL_DATE_PATTERN);
 const monthSchema = z.string().regex(MONTH_PATTERN);
+const stepSchema = z.enum(BOOKING_STEP_PARAM);
 
 export interface BookingQuery {
   /** A service id, or null when the visitor has not chosen one. */
@@ -65,6 +84,11 @@ export interface BookingQuery {
    * in the business's zone.
    */
   month: string | null;
+  /**
+   * `details` or `booked`, or null for the picker. Never a step the visitor
+   * has not earned: the page checks for a live hold before honouring it.
+   */
+  step: BookingStepParam | null;
 }
 
 /** Next hands repeated parameters through as arrays. Take the first. */
@@ -96,6 +120,7 @@ export function parseBookingQuery(
     staff: parse(staffSchema, raw[BOOKING_PARAM.staff]),
     date: parse(dateSchema, raw[BOOKING_PARAM.date]),
     month: parse(monthSchema, raw[BOOKING_PARAM.month]),
+    step: parse(stepSchema, raw[BOOKING_PARAM.step]),
   };
 }
 
@@ -117,7 +142,7 @@ export function bookingUrl(
 ): string {
   const params = new URLSearchParams();
 
-  for (const key of ["service", "staff", "date", "month"] as const) {
+  for (const key of ["service", "staff", "date", "month", "step"] as const) {
     const value = state[key];
 
     if (value) {

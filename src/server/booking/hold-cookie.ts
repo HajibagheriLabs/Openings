@@ -88,14 +88,25 @@ export async function readHoldCookie(slug: string): Promise<HoldCookie | null> {
   return value && value.slug === slug ? value : null;
 }
 
-/** Only callable from a Server Action or a Route Handler. */
-export async function writeHoldCookie(value: HoldCookie): Promise<void> {
+/**
+ * Only callable from a Server Action or a Route Handler.
+ *
+ * `maxAgeSeconds` exists for the one moment the cookie changes meaning: once
+ * the appointment is confirmed it stops being "the slot I am holding for eight
+ * minutes" and becomes "the appointment this browser just made", which has to
+ * outlive a refresh by rather more than eight minutes. The value inside is
+ * identical either way — the row's status is what says which it is.
+ */
+export async function writeHoldCookie(
+  value: HoldCookie,
+  maxAgeSeconds: number = COOKIE_MAX_AGE_SECONDS,
+): Promise<void> {
   (await cookies()).set(HOLD_COOKIE, encode(value), {
     httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
     path: "/",
-    maxAge: COOKIE_MAX_AGE_SECONDS,
+    maxAge: maxAgeSeconds,
   });
 }
 

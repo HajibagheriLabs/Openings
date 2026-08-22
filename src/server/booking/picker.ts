@@ -39,6 +39,16 @@ export interface PickerContext {
     depositType: "none" | "flat" | "percent";
     depositValue: number;
   };
+  /**
+   * The booking policy, carried alongside so the checks at submit and the
+   * sentences on the form are read from one row.
+   */
+  policy: {
+    minLeadTimeMin: number;
+    maxAdvanceDays: number;
+    cancellationWindowHours: number;
+    allowReschedule: boolean;
+  };
   /** Qualified, active staff for this service, in display order. */
   team: { id: string; name: string; initials: string }[];
   /** A specific person, or `any`. Always one of `team`, or `any`. */
@@ -104,6 +114,12 @@ export async function resolvePicker(
     slug: business.slug,
     timeZone: business.timezone,
     currency: business.currency,
+    policy: {
+      minLeadTimeMin: business.minLeadTimeMin,
+      maxAdvanceDays: business.maxAdvanceDays,
+      cancellationWindowHours: business.cancellationWindowHours,
+      allowReschedule: business.allowReschedule,
+    },
     service: {
       id: service.id,
       name: service.name,

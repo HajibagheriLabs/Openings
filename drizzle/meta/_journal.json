@@ -43,6 +43,13 @@
       "when": 1787380344366,
       "tag": "0005_holds_without_customer",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1787399299821,
+      "tag": "0006_appointment_policy_consent",
+      "breakpoints": true
     }
   ]
 }

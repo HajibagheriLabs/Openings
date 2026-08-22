@@ -1,6 +1,7 @@
 "use client";
 
 import { CalendarOff, List, Rows3 } from "lucide-react";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -75,6 +76,7 @@ export function TimeStep({
   staffId,
   currency,
   initial,
+  detailsHref,
   step,
   totalSteps,
   header,
@@ -87,6 +89,8 @@ export function TimeStep({
   currency: string;
   /** Rendered on the server, so the first paint is already the truth. */
   initial: PickerSnapshot;
+  /** Where Continue goes. The hold travels in a cookie, not in this address. */
+  detailsHref: string;
   step: number;
   totalSteps: number;
   header: ReactNode;
@@ -646,7 +650,9 @@ export function TimeStep({
           </span>
         </div>
 
-        <PillButton disabled>Continue</PillButton>
+        <PillButton asChild>
+          <Link href={detailsHref}>Continue</Link>
+        </PillButton>
       </div>
 
       <p role="status" className="sr-only">
@@ -673,11 +679,15 @@ export function TimeStep({
         <StepHeading
           eyebrow="Time"
           title="Pick a time"
+          /* A free consultation says "Free", not "€0.00". A currency-formatted
+             zero reads as a price that has not loaded yet. */
           description={`${dayLabel}. ${service.name}, ${formatDuration(
             service.durationMin,
-          )}, ${formatCents(service.priceCents, currency)}${
-            service.depositLine ? ` — ${service.depositLine}` : ""
-          }.`}
+          )}, ${
+            service.priceCents > 0
+              ? formatCents(service.priceCents, currency)
+              : "free"
+          }${service.depositLine ? ` — ${service.depositLine}` : ""}.`}
         />
 
         {notice ? (

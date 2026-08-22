@@ -27,12 +27,14 @@ describe("parseBookingQuery", () => {
         staff: STAFF,
         date: "2026-09-03",
         month: "2026-09",
+        step: "details",
       }),
     ).toEqual({
       service: SERVICE,
       staff: STAFF,
       date: "2026-09-03",
       month: "2026-09",
+      step: "details",
     });
   });
 
@@ -46,6 +48,7 @@ describe("parseBookingQuery", () => {
       staff: null,
       date: null,
       month: null,
+      step: null,
     });
   });
 
@@ -55,6 +58,7 @@ describe("parseBookingQuery", () => {
       staff: "42",
       date: "03/09/2026",
       month: "September",
+      step: "pay-now",
     });
 
     expect(query).toEqual({
@@ -62,6 +66,7 @@ describe("parseBookingQuery", () => {
       staff: null,
       date: null,
       month: null,
+      step: null,
     });
   });
 
@@ -69,6 +74,15 @@ describe("parseBookingQuery", () => {
     expect(parseBookingQuery({ date: "2026-13-01" }).date).toBeNull();
     expect(parseBookingQuery({ date: "2026-09-32" }).date).toBeNull();
     expect(parseBookingQuery({ month: "2026-00" }).month).toBeNull();
+  });
+
+  it("only honours the two steps that exist", () => {
+    /* `details` and `booked` are the screens that cannot be inferred from what
+       has been answered — see the note on BOOKING_STEP_PARAM. Anything else in
+       that slot is somebody guessing, and is dropped. */
+    expect(parseBookingQuery({ step: "details" }).step).toBe("details");
+    expect(parseBookingQuery({ step: "booked" }).step).toBe("booked");
+    expect(parseBookingQuery({ step: "pay" }).step).toBeNull();
   });
 
   it("takes the first value when a parameter is repeated", () => {
@@ -120,6 +134,7 @@ describe("bookingUrl", () => {
       staff: STAFF,
       date: "2026-09-03",
       month: null,
+      step: null,
     });
   });
 });

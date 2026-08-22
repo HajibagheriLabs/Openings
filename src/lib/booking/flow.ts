@@ -13,13 +13,21 @@
  * the progress line and the step actually being rendered cannot drift.
  */
 
-export type BookingStepId = "service" | "staff" | "date" | "time";
+export type BookingStepId =
+  | "service"
+  | "staff"
+  | "date"
+  | "time"
+  | "details"
+  | "pay";
 
 export const BOOKING_STEP_LABEL: Record<BookingStepId, string> = {
   service: "Service",
   staff: "Who",
   date: "Day",
   time: "Time",
+  details: "Your details",
+  pay: "Deposit",
 };
 
 export interface BookingFlow {
@@ -44,10 +52,21 @@ export interface BookingFlowInput {
    * the progress line may jump forward but never backward.
    */
   staffCount: number;
+  /**
+   * Whether this service asks for a deposit.
+   *
+   * A FREE CONSULTATION HAS NO PAYMENT STEP, and the progress line must not
+   * pretend otherwise — telling somebody there are five steps and finishing at
+   * four is a small lie that makes every other number on the page suspect. The
+   * deposit decides whether the step exists at all, not whether it is skipped.
+   */
+  hasDeposit: boolean;
   chosen: {
     service: boolean;
     staff: boolean;
     date: boolean;
+    /** A live hold. The answer to "which time" lives in a cookie, not the URL. */
+    time: boolean;
   };
 }
 
@@ -62,7 +81,11 @@ export function buildBookingFlow(input: BookingFlowInput): BookingFlow {
     steps.push("staff");
   }
 
-  steps.push("date", "time");
+  steps.push("date", "time", "details");
+
+  if (input.hasDeposit) {
+    steps.push("pay");
+  }
 
   /**
    * The current step is the first one still waiting for an answer. A step that
@@ -75,7 +98,9 @@ export function buildBookingFlow(input: BookingFlowInput): BookingFlow {
     service: input.chosen.service,
     staff: input.chosen.staff,
     date: input.chosen.date,
-    time: false,
+    time: input.chosen.time,
+    details: false,
+    pay: false,
   };
 
   const currentIndex = steps.findIndex((step) => !answered[step]);
