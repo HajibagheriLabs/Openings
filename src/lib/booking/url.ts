@@ -31,6 +31,10 @@ export const BOOKING_PARAM = {
   date: "date",
   month: "month",
   step: "step",
+  /** The Stripe Checkout Session, on the way back from paying. */
+  session: "session",
+  /** A neutral thing that happened, worth one sentence. Never an error code. */
+  notice: "notice",
 } as const;
 
 /**
@@ -45,8 +49,13 @@ export const BOOKING_PARAM = {
  * `booked` is the same shape of fact: the appointment is confirmed, and the
  * address should say so rather than leaving a refresh to land back on a picker
  * for a slot that is no longer for sale.
+ *
+ * `confirming` is where Stripe sends somebody after they pay. IT IS NOT PROOF
+ * OF ANYTHING — a redirect is a browser navigation, and the payment is only
+ * real once the signed webhook says so. The step exists precisely because that
+ * gap is real and the customer is standing in it.
  */
-export const BOOKING_STEP_PARAM = ["details", "booked"] as const;
+export const BOOKING_STEP_PARAM = ["details", "confirming", "booked"] as const;
 
 export type BookingStepParam = (typeof BOOKING_STEP_PARAM)[number];
 
@@ -65,11 +74,33 @@ export const LOCAL_DATE_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[0
 /** "2026-09" — the month the calendar is showing. */
 export const MONTH_PATTERN = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 
+/**
+ * A Stripe Checkout Session id, as Stripe substitutes it into `success_url`.
+ *
+ * It is matched by SHAPE only. What it identifies is checked against the
+ * database, and it never grants anything the cookie would not — see
+ * `loadConfirmedBooking`.
+ */
+export const CHECKOUT_SESSION_PATTERN = /^cs_[A-Za-z0-9_]{10,255}$/;
+
+/**
+ * Neutral things that can have just happened, each worth one plain sentence.
+ *
+ * Not errors and not statuses — a person who backed out of a payment page did
+ * something completely ordinary, and the copy on the other side of it should
+ * say so without a warning triangle.
+ */
+export const BOOKING_NOTICE = ["checkout-cancelled"] as const;
+
+export type BookingNotice = (typeof BOOKING_NOTICE)[number];
+
 const serviceSchema = z.uuid();
 const staffSchema = z.union([z.literal(ANY_STAFF), z.uuid()]);
 const dateSchema = z.string().regex(LOCAL_DATE_PATTERN);
 const monthSchema = z.string().regex(MONTH_PATTERN);
 const stepSchema = z.enum(BOOKING_STEP_PARAM);
+const sessionSchema = z.string().regex(CHECKOUT_SESSION_PATTERN);
+const noticeSchema = z.enum(BOOKING_NOTICE);
 
 export interface BookingQuery {
   /** A service id, or null when the visitor has not chosen one. */
@@ -85,10 +116,23 @@ export interface BookingQuery {
    */
   month: string | null;
   /**
-   * `details` or `booked`, or null for the picker. Never a step the visitor
-   * has not earned: the page checks for a live hold before honouring it.
+   * `details`, `confirming` or `booked`, or null for the picker. Never a step
+   * the visitor has not earned: the page checks for a live hold, or for a real
+   * appointment, before honouring any of them.
    */
   step: BookingStepParam | null;
+  /**
+   * The Checkout Session Stripe just sent them back from, or null.
+   *
+   * A SECOND WAY TO NAME THE BOOKING, and it earns its place: the hold cookie
+   * lives about as long as the hold does, and a customer who spent four
+   * minutes on Stripe's page can arrive back with it already gone. The session
+   * id is unguessable, was handed to this browser by Stripe, and identifies
+   * exactly one appointment — so the confirmation still resolves.
+   */
+  session: string | null;
+  /** Something ordinary that just happened, for one sentence of copy. */
+  notice: BookingNotice | null;
 }
 
 /** Next hands repeated parameters through as arrays. Take the first. */
@@ -121,6 +165,8 @@ export function parseBookingQuery(
     date: parse(dateSchema, raw[BOOKING_PARAM.date]),
     month: parse(monthSchema, raw[BOOKING_PARAM.month]),
     step: parse(stepSchema, raw[BOOKING_PARAM.step]),
+    session: parse(sessionSchema, raw[BOOKING_PARAM.session]),
+    notice: parse(noticeSchema, raw[BOOKING_PARAM.notice]),
   };
 }
 
@@ -142,7 +188,15 @@ export function bookingUrl(
 ): string {
   const params = new URLSearchParams();
 
-  for (const key of ["service", "staff", "date", "month", "step"] as const) {
+  for (const key of [
+    "service",
+    "staff",
+    "date",
+    "month",
+    "step",
+    "session",
+    "notice",
+  ] as const) {
     const value = state[key];
 
     if (value) {

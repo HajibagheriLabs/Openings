@@ -34,6 +34,16 @@ export function BookingSummaryPanel({
   /** Shown once the booking is done, in place of the deposit call-to-action. */
   tone = "pending",
   /**
+   * Whether the deposit has actually been taken.
+   *
+   * Only consulted once `tone` is "confirmed", and it changes one line from
+   * "Deposit paid" to "Deposit due" — because a confirmed booking does not
+   * always mean a paid one. An owner can enter a booking by hand and take the
+   * deposit at the counter. Telling that customer their deposit is paid is a
+   * small lie with a real argument at the end of it.
+   */
+  depositPaid = true,
+  /**
    * Whether this panel carries the cancellation policy.
    *
    * On the details step it does NOT: the consent box a few inches below prints
@@ -46,6 +56,7 @@ export function BookingSummaryPanel({
   summary: BookingSummaryData;
   countdown?: ReactNode;
   tone?: "pending" | "confirmed";
+  depositPaid?: boolean;
   showPolicy?: boolean;
   className?: string;
 }) {
@@ -102,8 +113,19 @@ export function BookingSummaryPanel({
         {summary.depositCents > 0 ? (
           <>
             <Money
-              label={tone === "confirmed" ? "Deposit paid" : "Due now"}
+              label={
+                tone === "confirmed"
+                  ? depositPaid
+                    ? "Deposit paid"
+                    : "Deposit due"
+                  : "Due now"
+              }
               value={formatCents(summary.depositCents, summary.currency)}
+              hint={
+                tone === "confirmed" && !depositPaid
+                  ? "Payable when you arrive."
+                  : undefined
+              }
               emphasis
             />
             <Money

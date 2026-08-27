@@ -48,7 +48,11 @@ export function ConfirmedStep({
           </p>
         </div>
 
-        <BookingSummaryPanel summary={booking.summary} tone="confirmed" />
+        <BookingSummaryPanel
+          summary={booking.summary}
+          tone="confirmed"
+          depositPaid={booking.depositPaid}
+        />
 
         <p className="type-body-sm text-ink-faint">
           Nothing else to do. Keep the confirmation email — it is how you change

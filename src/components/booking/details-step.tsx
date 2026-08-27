@@ -19,6 +19,7 @@ import { formatInstant, formatInstantDate } from "@/components/time-text";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import type { StartCheckoutResult } from "@/lib/booking/checkout";
 import type { BookingSummary } from "@/lib/booking/details";
 import type { HoldSnapshot } from "@/lib/booking/hold";
 import type { PolicyRefusal } from "@/lib/booking/policy";
@@ -29,7 +30,9 @@ import {
   type BookingDetailsField,
   type BookingDetailsInput,
 } from "@/lib/validation/booking-details";
+import { bookingUrl } from "@/lib/booking/url";
 import { cn } from "@/lib/utils";
+import { beginCheckout } from "@/server/actions/checkout";
 import { submitDetails } from "@/server/actions/details";
 
 /**
@@ -75,8 +78,18 @@ export function DetailsStep({
   >({});
   const [refusal, setRefusal] = useState<PolicyRefusal | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [awaitingPayment, setAwaitingPayment] = useState(false);
+  /**
+   * Set once the details are saved and a deposit is owed.
+   *
+   * Holds the LAST handoff attempt, so the panel below can say what happened:
+   * a URL means the browser is already navigating to Stripe, and anything else
+   * is a reason plus a way to try again. Null means no deposit step.
+   */
+  const [payment, setPayment] = useState<StartCheckoutResult | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [pending, startTransition] = useTransition();
+
+  const awaitingPayment = payment !== null;
 
   const countdown = useHoldCountdown(hold);
 
@@ -158,7 +171,16 @@ export function DetailsStep({
           return;
         }
 
-        setAwaitingPayment(true);
+        /**
+         * A DEPOSIT IS DUE, AND THE SESSION WAS CREATED IN THE SAME CALL.
+         *
+         * The details are saved against the hold, the slot is still reserved,
+         * and the countdown above is still running against the same row.
+         * Nothing here is a confirmation — that happens in the verified
+         * webhook, after Stripe has taken the money.
+         */
+        setPayment(result.checkout);
+        goToStripe(result.checkout);
         return;
       }
 
@@ -173,6 +195,48 @@ export function DetailsStep({
       }
 
       setFormError(result.message);
+    });
+  }
+
+  /**
+   * Leave the app.
+   *
+   * `window.location.assign` rather than the router: Stripe's page is not part
+   * of this application and a client-side navigation cannot reach it. A full
+   * document navigation is also what makes the back button land on Stripe's
+   * own cancel handling rather than halfway through a React transition.
+   */
+  function goToStripe(result: StartCheckoutResult) {
+    if (result.ok && result.url) {
+      window.location.assign(result.url);
+      return;
+    }
+
+    /* Already paid — somebody pressed twice, or came back to an old tab. The
+       confirming screen is where that waits for the webhook. */
+    if (result.ok) {
+      router.push(bookingUrl(slug, { step: "confirming" }));
+    }
+  }
+
+  /** Try the handoff again. The details are saved; only the session failed. */
+  function retryPayment() {
+    setRetrying(true);
+
+    startTransition(async () => {
+      const result = await beginCheckout({ slug });
+
+      setRetrying(false);
+      setPayment(result);
+
+      if (result.ok) {
+        goToStripe(result);
+        return;
+      }
+
+      if (result.reason === "policy") {
+        setRefusal(result.refusal);
+      }
     });
   }
 
@@ -254,8 +318,13 @@ export function DetailsStep({
           />
         ) : null}
 
-        {awaitingPayment ? (
-          <PaymentHandoff summary={summary} />
+        {payment ? (
+          <PaymentHandoff
+            summary={summary}
+            result={payment}
+            onRetry={retryPayment}
+            retrying={retrying}
+          />
         ) : dead ? null : (
           <form
             id="booking-details"
@@ -443,14 +512,46 @@ function RefusalPanel({
 }
 
 /**
- * The deposit is due, and paying it is the next step.
+ * The deposit is due, and Stripe is the next step.
  *
- * The details ARE saved against the hold at this point and the slot is still
- * reserved — the countdown in the bar above is still running against the same
- * row. What is not built yet is the Stripe Checkout session, so this says so
- * plainly rather than presenting a button that does nothing.
+ * In the ordinary case this is on screen for a fraction of a second: the
+ * session was created in the same round trip as the submit and the browser is
+ * already navigating to Stripe. It is written for the other case — a Stripe
+ * outage, a missing key, a network failure — where the DETAILS ARE SAVED AND
+ * THE SLOT IS STILL HELD, and the only thing that failed is one API call. So
+ * it says what happened and offers the button again, rather than discarding a
+ * booking somebody has already filled in a form for.
  */
-function PaymentHandoff({ summary }: { summary: BookingSummary }) {
+function PaymentHandoff({
+  summary,
+  result,
+  onRetry,
+  retrying,
+}: {
+  summary: BookingSummary;
+  result: StartCheckoutResult;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  const amount = formatCents(summary.depositCents, summary.currency);
+
+  /* The happy path and the "already paid" path are both handled by a
+     navigation the caller has started. Saying anything more would be a flash
+     of text nobody has time to read. */
+  if (result.ok) {
+    return (
+      <div
+        role="status"
+        className="flex items-center gap-3 rounded-card border border-line bg-surface px-5 py-4"
+      >
+        <Loader2 aria-hidden="true" className="size-4 animate-spin text-accent" />
+        <p className="type-body text-ink-muted">
+          Taking you to the secure payment page.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       role="status"
@@ -458,15 +559,29 @@ function PaymentHandoff({ summary }: { summary: BookingSummary }) {
     >
       <CreditCard aria-hidden="true" className="size-5 text-ink-faint" />
 
-      <p className="type-section text-ink">
-        {formatCents(summary.depositCents, summary.currency)} deposit to pay
-      </p>
+      <p className="type-section text-ink">{amount} deposit to pay</p>
 
       <p className="type-body text-ink-muted">
-        Your details are saved and the slot is still held. Card payment is the
-        next part of the flow to be built — until it is, this business takes the
-        deposit directly.
+        {result.reason === "policy"
+          ? result.refusal.message
+          : result.message}
       </p>
+
+      {result.reason === "error" ? (
+        <>
+          <p className="type-body-sm text-ink-faint">
+            Your details are saved and the slot is still held — nothing has been
+            lost.
+          </p>
+
+          <PillButton onClick={onRetry} disabled={retrying}>
+            {retrying ? (
+              <Loader2 aria-hidden="true" className="animate-spin" />
+            ) : null}
+            Try the payment page again
+          </PillButton>
+        </>
+      ) : null}
     </div>
   );
 }

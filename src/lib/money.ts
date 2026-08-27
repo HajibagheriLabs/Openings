@@ -59,10 +59,29 @@ export function formatCents(
 }
 
 /**
- * The deposit a service asks for, in cents.
+ * THE deposit a service asks for, in integer cents. One implementation.
  *
- * `percent` rounds to the nearest cent and can never exceed the price — a 100%
- * deposit is the full amount, not a rounding artefact one cent above it.
+ * Every number that reaches a customer or a card comes through here: the price
+ * line on the picker, the "due now" row in the summary, the amount written
+ * onto the appointment when the hold is taken, and the `unit_amount` on the
+ * Stripe Checkout Session. A second implementation anywhere would eventually
+ * differ by a cent on some percentage, and that is the class of bug exactly
+ * one customer notices and nobody believes.
+ *
+ * ROUNDING DIRECTION, STATED: `percent` rounds HALF UP to the nearest whole
+ * cent. `Math.round` in JavaScript rounds .5 away from zero for positive
+ * numbers, and every input here is non-negative, so a 12.5-cent deposit is 13
+ * — the business is never a cent short, and the customer is never asked for a
+ * fraction of a cent that cannot be charged. The difference is at most one
+ * cent on one line; the point is that it is decided in one place rather than
+ * per caller.
+ *
+ * CAPPED AT THE PRICE, always. A 100% deposit is the full amount and not a
+ * rounding artefact a cent above it, and a flat deposit an owner typed larger
+ * than the price cannot charge more than the service costs. The service form
+ * already refuses both, so this is the second line of defence rather than the
+ * first — but it is the line that runs against rows written before a rule
+ * existed.
  */
 export function depositCentsFor(service: {
   priceCents: number;

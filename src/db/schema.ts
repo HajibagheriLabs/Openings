@@ -248,6 +248,21 @@ export const businesses = pgTable("businesses", {
     .default(24),
   allowReschedule: boolean("allow_reschedule").notNull().default(true),
 
+  /**
+   * Authorize the deposit now and capture it later, instead of charging it at
+   * booking. OFF BY DEFAULT, and deliberately hard to want.
+   *
+   * Stripe cancels an uncaptured PaymentIntent after roughly seven days, so a
+   * manual-capture authorization on anything booked further ahead than a week
+   * dies quietly before the appointment: no money taken, nobody told, and an
+   * empty chair. Even with this on, `chooseCaptureMethod` only uses manual
+   * capture for appointments inside that window and charges immediately for
+   * everything else — see src/lib/payments/checkout.ts.
+   */
+  manualCaptureEnabled: boolean("manual_capture_enabled")
+    .notNull()
+    .default(false),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

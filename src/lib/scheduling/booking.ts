@@ -18,6 +18,7 @@ import {
   services,
   type Appointment,
 } from "@/db/schema";
+import { depositCentsFor } from "@/lib/money";
 
 import { buildBlockingRange, type BlockingRange } from "./slot";
 
@@ -321,7 +322,11 @@ async function takeHold(
           // the sweep above are read from the same clock.
           holdExpiresAt: sql`now() + make_interval(mins => ${holdMinutes}::int)`,
           priceCents: service.priceCents,
-          depositCents: depositFor(service),
+          /* The deposit is SNAPSHOTTED here, from the one implementation in
+             src/lib/money.ts. Charging what the service asked for at the
+             moment the slot was taken is what stops an owner editing prices
+             mid-form from changing what this customer is about to pay. */
+          depositCents: depositCentsFor(service),
           icsUid,
           icsSequence: 0,
           manageTokenHash,
@@ -403,23 +408,6 @@ async function rebuildRangeForError(
     input.startsAt,
     service ?? { durationMin: 0, bufferBeforeMin: 0, bufferAfterMin: 0 },
   );
-}
-
-/** Deposit owed at booking time, in integer cents. */
-function depositFor(service: {
-  depositType: "none" | "flat" | "percent";
-  depositValue: number;
-  priceCents: number;
-}): number {
-  switch (service.depositType) {
-    case "none":
-      return 0;
-    case "flat":
-      return service.depositValue;
-    case "percent":
-      // Round half up; the business is never short a cent.
-      return Math.round((service.priceCents * service.depositValue) / 100);
-  }
 }
 
 /* ===========================================================================

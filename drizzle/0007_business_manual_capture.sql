@@ -1,0 +1,23 @@
+-- ============================================================================
+-- businesses.manual_capture_enabled
+--
+-- Whether this business authorizes the deposit at booking and captures it
+-- later, instead of charging it immediately. FALSE by default, and the default
+-- is the recommendation.
+--
+-- Stripe cancels an uncaptured PaymentIntent after roughly seven days. So a
+-- manual-capture authorization taken for an appointment three weeks out is not
+-- a hold that waits — it is a hold that expires silently, and the first anybody
+-- learns of it is an empty chair and no money. Immediate capture either
+-- succeeds now or fails now, and a refund is a first-class operation with a
+-- webhook behind it.
+--
+-- Even with this column true, src/lib/payments/checkout.ts only uses manual
+-- capture for appointments that start inside that window and charges
+-- immediately for everything else. Two conditions, every time.
+--
+-- Safe on a populated table: a boolean with a constant default is a catalogue
+-- change in Postgres 11+, so no rewrite and no long lock.
+-- ============================================================================
+
+ALTER TABLE "businesses" ADD COLUMN "manual_capture_enabled" boolean DEFAULT false NOT NULL;

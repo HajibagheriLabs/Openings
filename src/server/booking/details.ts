@@ -1,6 +1,6 @@
 import "server-only";
 
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -162,34 +162,42 @@ export async function loadDetailsContext(
 /**
  * The booking this browser just made, for the confirmation screen.
  *
- * Reads the same cookie the hold used — once an appointment is confirmed the
- * cookie stops meaning "the slot I am holding" and starts meaning "the
- * appointment I just made", which is what makes a refresh of the confirmation
- * screen work. Returns null for anything that is not a confirmed appointment
- * belonging to this token, so a stale cookie simply falls through to the
- * picker rather than erroring.
+ * TWO WAYS TO NAME IT, because one is not enough.
+ *
+ * The hold cookie is the first: once an appointment is confirmed the cookie
+ * stops meaning "the slot I am holding" and starts meaning "the appointment I
+ * just made", which is what makes a refresh of the confirmation screen work.
+ * But it is written to live about as long as a hold, and a customer who spent
+ * five minutes on Stripe's page can arrive back without one.
+ *
+ * So the Stripe Checkout Session id is the second. Stripe generated it, put it
+ * in the return URL it handed THIS browser, and it names exactly one
+ * appointment. It is scoped to the business in the query, and it is only ever
+ * a way to READ a confirmation — changing or cancelling still needs the manage
+ * token from the email.
+ *
+ * Returns null for anything that is not a confirmed appointment reachable one
+ * of those two ways, so a stale cookie simply falls through to the picker
+ * rather than erroring.
  */
 export async function loadConfirmedBooking(
   slug: string,
+  sessionId: string | null = null,
 ): Promise<ConfirmedBooking | null> {
-  const cookie = await readHoldCookie(slug);
+  const appointmentId = await resolveConfirmedAppointmentId(slug, sessionId);
 
-  if (!cookie) {
-    return null;
-  }
-
-  const appointment = await readOwnAppointment(
-    db,
-    cookie.appointmentId,
-    cookie.manageToken,
-  );
-
-  if (!appointment || appointment.status !== "confirmed") {
+  if (!appointmentId) {
     return null;
   }
 
   const [row] = await db
     .select({
+      status: appointmentsTable.status,
+      startsAt: appointmentsTable.startsAt,
+      endsAt: appointmentsTable.endsAt,
+      priceCents: appointmentsTable.priceCents,
+      depositCents: appointmentsTable.depositCents,
+      paymentIntentId: appointmentsTable.stripePaymentIntentId,
       serviceName: services.name,
       durationMin: services.durationMin,
       staffName: staff.name,
@@ -204,16 +212,20 @@ export async function loadConfirmedBooking(
     .innerJoin(staff, eq(staff.id, appointmentsTable.staffId))
     .innerJoin(customers, eq(customers.id, appointmentsTable.customerId))
     .innerJoin(businesses, eq(businesses.id, appointmentsTable.businessId))
-    .where(eq(appointmentsTable.id, appointment.id))
+    .where(eq(appointmentsTable.id, appointmentId))
     .limit(1);
 
-  if (!row) {
+  if (!row || row.status !== "confirmed") {
     return null;
   }
 
   return {
-    appointmentId: appointment.id,
+    appointmentId,
     email: row.email,
+    /* The PAYMENT says the deposit was taken, not the status. See the note on
+       `depositPaid` — a booking can be confirmed with the deposit still owed
+       at the counter. */
+    depositPaid: row.depositCents > 0 && row.paymentIntentId !== null,
     summary: buildBookingSummary({
       business: {
         timezone: row.timezone,
@@ -224,10 +236,54 @@ export async function loadConfirmedBooking(
       serviceName: row.serviceName,
       durationMin: row.durationMin,
       staffName: row.staffName,
-      startsAt: appointment.startsAt,
-      endsAt: appointment.endsAt,
-      priceCents: appointment.priceCents,
-      depositCents: appointment.depositCents,
+      startsAt: row.startsAt,
+      endsAt: row.endsAt,
+      priceCents: row.priceCents,
+      depositCents: row.depositCents,
     }),
   };
+}
+
+/**
+ * The appointment id, from the cookie if this browser has one and from the
+ * Stripe session if it does not.
+ *
+ * The cookie is tried first because it is token-checked, which is the stronger
+ * claim of the two.
+ */
+async function resolveConfirmedAppointmentId(
+  slug: string,
+  sessionId: string | null,
+): Promise<string | null> {
+  const cookie = await readHoldCookie(slug);
+
+  if (cookie) {
+    const appointment = await readOwnAppointment(
+      db,
+      cookie.appointmentId,
+      cookie.manageToken,
+    );
+
+    if (appointment) {
+      return appointment.id;
+    }
+  }
+
+  if (!sessionId) {
+    return null;
+  }
+
+  const [row] = await db
+    .select({ id: appointmentsTable.id })
+    .from(appointmentsTable)
+    .innerJoin(businesses, eq(businesses.id, appointmentsTable.businessId))
+    .where(
+      and(
+        eq(appointmentsTable.stripeCheckoutSessionId, sessionId),
+        eq(businesses.slug, slug),
+      ),
+    )
+    .limit(1);
+
+  return row?.id ?? null;
 }

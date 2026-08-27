@@ -47,6 +47,18 @@ export interface HoldCookie {
  */
 const COOKIE_MAX_AGE_SECONDS = (DEFAULT_HOLD_MINUTES + 1) * 60;
 
+/**
+ * How long the cookie lives once it names a CONFIRMED appointment.
+ *
+ * A day. At the moment a booking is confirmed the cookie stops meaning "the
+ * slot I am holding for eight minutes" and starts meaning "the appointment
+ * this browser just made" — which has to survive a refresh, a shared phone
+ * being handed back and a walk home. A day is long enough for all three and
+ * short enough that a library machine is not carrying somebody's booking next
+ * week. The confirmation email is the durable copy.
+ */
+export const CONFIRMED_COOKIE_SECONDS = 24 * 60 * 60;
+
 function encode(value: HoldCookie): string {
   return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
 }

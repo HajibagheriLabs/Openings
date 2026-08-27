@@ -1,3 +1,4 @@
+import type { StartCheckoutResult } from "@/lib/booking/checkout";
 import type { PolicyRefusal } from "@/lib/booking/policy";
 import type { BookingDetailsField } from "@/lib/validation/booking-details";
 
@@ -43,6 +44,18 @@ export interface ConfirmedBooking {
   summary: BookingSummary;
   /** Where the confirmation was sent. Shown so a typo is obvious immediately. */
   email: string;
+  /**
+   * Whether the deposit was actually taken.
+   *
+   * A confirmed appointment with a deposit on it has usually been PAID — that
+   * is what confirmed it. But not always: an owner can enter a booking by hand
+   * and take the deposit at the counter, and a business running without Stripe
+   * configured takes it in person too. "Deposit paid" and "deposit due when you
+   * arrive" are different sentences and the customer is owed the right one, so
+   * this is read from the payment on the row rather than assumed from the
+   * status.
+   */
+  depositPaid: boolean;
 }
 
 export type SubmitDetailsResult =
@@ -55,7 +68,21 @@ export type SubmitDetailsResult =
    * still runs — and payment is the next step. Confirmation happens only in
    * the verified Stripe webhook, never on a redirect.
    */
-  | { ok: true; outcome: "payment-required"; depositCents: number }
+  | {
+      ok: true;
+      outcome: "payment-required";
+      depositCents: number;
+      /**
+       * The handoff to Stripe, attempted in this same round trip.
+       *
+       * One click rather than two: the details are saved and the Checkout
+       * Session is created before the response comes back, so the browser
+       * navigates straight to Stripe. If creating it failed, this carries the
+       * reason and the form offers a retry — the details are saved and the
+       * slot is still held either way.
+       */
+      checkout: StartCheckoutResult;
+    }
   /** The form itself. Field-level, so the message lands under the input. */
   | {
       ok: false;

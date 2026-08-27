@@ -11,8 +11,12 @@ import {
   bookingDetailsSchema,
   type BookingDetailsField,
 } from "@/lib/validation/booking-details";
+import { handOffToStripe } from "@/server/booking/checkout";
 import { loadDetailsContext } from "@/server/booking/details";
-import { writeHoldCookie } from "@/server/booking/hold-cookie";
+import {
+  CONFIRMED_COOKIE_SECONDS,
+  writeHoldCookie,
+} from "@/server/booking/hold-cookie";
 import { localDateOf } from "@/server/booking/picker";
 import {
   checkLeadTime,
@@ -225,18 +229,23 @@ export async function submitDetails(
     return { ok: true, outcome: "confirmed" };
   }
 
+  /**
+   * A DEPOSIT IS OWED, SO STRIPE IS THE NEXT STEP — started here, in the same
+   * round trip, so the customer gets one click instead of two.
+   *
+   * The appointment stays `held`: the slot is still reserved, the countdown is
+   * still running against the same row, and nothing about this is a
+   * confirmation. Confirmation happens in the verified webhook and nowhere
+   * else. If the session cannot be created, the details are still saved and
+   * the slot is still held — the form says what happened and offers to try
+   * again rather than throwing the booking away.
+   */
+  const checkout = await handOffToStripe(hold.id, now);
+
   return {
     ok: true,
     outcome: "payment-required",
     depositCents: hold.depositCents,
+    checkout,
   };
 }
-
-/**
- * How long the confirmation stays readable in this browser.
- *
- * A day. Long enough to survive a refresh, a shared phone being handed back
- * and a walk home; short enough that a public library machine is not carrying
- * somebody's booking a week later. The confirmation email is the durable copy.
- */
-const CONFIRMED_COOKIE_SECONDS = 24 * 60 * 60;

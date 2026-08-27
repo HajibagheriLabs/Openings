@@ -7,6 +7,7 @@ import {
 } from "@/components/booking/booking-choices";
 import { BusinessHeader } from "@/components/booking/business-header";
 import { ConfirmedStep } from "@/components/booking/confirmed-step";
+import { ConfirmingStep } from "@/components/booking/confirming-step";
 import { DateStep } from "@/components/booking/date-step";
 import { DetailsStep } from "@/components/booking/details-step";
 import { HoldGone } from "@/components/booking/hold-gone";
@@ -143,8 +144,26 @@ export default async function BookingPage({
      from the cookie the hold left behind.
   --------------------------------------------------------------------- */
 
+  /**
+   * BACK FROM STRIPE, AND NOT YET BOOKED.
+   *
+   * Checked before everything else and rendered without any of the picker's
+   * data, because the one thing this screen must never do is imply that a
+   * redirect confirmed anything. The appointment is still `held` at this
+   * moment; the webhook is what changes that, and this screen waits for it.
+   */
+  if (query.step === "confirming") {
+    return (
+      <ConfirmingStep
+        slug={slug}
+        sessionId={query.session}
+        header={header}
+      />
+    );
+  }
+
   if (query.step === "booked") {
-    const booking = await loadConfirmedBooking(slug);
+    const booking = await loadConfirmedBooking(slug, query.session);
 
     if (booking) {
       return <ConfirmedStep booking={booking} slug={slug} header={header} />;
@@ -484,6 +503,14 @@ export default async function BookingPage({
       staffId={staffParam ?? null}
       currency={business.currency}
       initial={picked.snapshot}
+      /* Coming back from an abandoned payment. ABANDONING CHECKOUT IS NORMAL:
+         one flat sentence, no apology, no warning triangle, and the day is
+         already redrawn with the slot back in it. */
+      initialNotice={
+        query.notice === "checkout-cancelled"
+          ? "Nothing was charged and your time is back in the day. Pick it again — or another — whenever you are ready."
+          : null
+      }
       detailsHref={bookingUrl(slug, {
         service: service.id,
         staff: staffParam,

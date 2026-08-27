@@ -35,6 +35,8 @@ describe("parseBookingQuery", () => {
       date: "2026-09-03",
       month: "2026-09",
       step: "details",
+      session: null,
+      notice: null,
     });
   });
 
@@ -49,6 +51,8 @@ describe("parseBookingQuery", () => {
       date: null,
       month: null,
       step: null,
+      session: null,
+      notice: null,
     });
   });
 
@@ -59,6 +63,8 @@ describe("parseBookingQuery", () => {
       date: "03/09/2026",
       month: "September",
       step: "pay-now",
+      session: "sess_123",
+      notice: "everything-is-fine",
     });
 
     expect(query).toEqual({
@@ -67,6 +73,8 @@ describe("parseBookingQuery", () => {
       date: null,
       month: null,
       step: null,
+      session: null,
+      notice: null,
     });
   });
 
@@ -76,13 +84,25 @@ describe("parseBookingQuery", () => {
     expect(parseBookingQuery({ month: "2026-00" }).month).toBeNull();
   });
 
-  it("only honours the two steps that exist", () => {
-    /* `details` and `booked` are the screens that cannot be inferred from what
-       has been answered — see the note on BOOKING_STEP_PARAM. Anything else in
-       that slot is somebody guessing, and is dropped. */
+  it("only honours the steps that exist", () => {
+    /* `details`, `confirming` and `booked` are the screens that cannot be
+       inferred from what has been answered — see the note on
+       BOOKING_STEP_PARAM. Anything else in that slot is somebody guessing,
+       and is dropped. */
     expect(parseBookingQuery({ step: "details" }).step).toBe("details");
+    expect(parseBookingQuery({ step: "confirming" }).step).toBe("confirming");
     expect(parseBookingQuery({ step: "booked" }).step).toBe("booked");
     expect(parseBookingQuery({ step: "pay" }).step).toBeNull();
+  });
+
+  it("takes a Stripe session id by shape and nothing else", () => {
+    /* Shape only. WHAT it identifies is checked against the database — the id
+       is a way to name an appointment, never a way to be granted one. */
+    const session = `cs_test_${"a".repeat(40)}`;
+
+    expect(parseBookingQuery({ session }).session).toBe(session);
+    expect(parseBookingQuery({ session: "cs_short" }).session).toBeNull();
+    expect(parseBookingQuery({ session: "pi_3Nabcdefghijkl" }).session).toBeNull();
   });
 
   it("takes the first value when a parameter is repeated", () => {
@@ -130,6 +150,8 @@ describe("bookingUrl", () => {
     const params = new URL(url, "https://example.test").searchParams;
 
     expect(parseBookingQuery(Object.fromEntries(params))).toEqual({
+      session: null,
+      notice: null,
       service: SERVICE,
       staff: STAFF,
       date: "2026-09-03",

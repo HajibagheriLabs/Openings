@@ -76,6 +76,7 @@ export function TimeStep({
   staffId,
   currency,
   initial,
+  initialNotice = null,
   detailsHref,
   step,
   totalSteps,
@@ -89,6 +90,13 @@ export function TimeStep({
   currency: string;
   /** Rendered on the server, so the first paint is already the truth. */
   initial: PickerSnapshot;
+  /**
+   * One plain sentence about something ordinary that just happened — coming
+   * back from an abandoned payment, for instance. Deliberately the same slot
+   * the "that time just went" message uses: there is one place on this screen
+   * where the product speaks, and it is never a warning triangle.
+   */
+  initialNotice?: string | null;
   /** Where Continue goes. The hold travels in a cookie, not in this address. */
   detailsHref: string;
   step: number;
@@ -102,7 +110,7 @@ export function TimeStep({
   const [notice, setNotice] = useState<{
     message: string;
     nearest: DayOffer[];
-  } | null>(null);
+  } | null>(initialNotice ? { message: initialNotice, nearest: [] } : null);
   /**
    * Start instants that vanished under the visitor, drawn hatched while they
    * fade. Ids rather than offers, because the geometry is recovered from the
