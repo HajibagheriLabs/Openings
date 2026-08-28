@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { appointments } from "@/db/schema";
 import {
   createHold,
-  confirmHold,
+  confirmPaidHold,
   releaseHold,
   reclaimExpiredHolds,
   SlotTakenError,
@@ -200,7 +200,7 @@ describe("buffers live in the stored range", () => {
 describe("which rows block", () => {
   it("does not let a cancelled appointment block its old slot", async () => {
     const first = await hold({ startsAt: at(10) });
-    await confirmHold(ctx.db, first.appointment.id);
+    await confirmPaidHold(ctx.db, { appointmentId: first.appointment.id });
 
     await expect(hold({ startsAt: at(10) })).rejects.toBeInstanceOf(
       SlotTakenError,
@@ -263,9 +263,16 @@ describe("hold lifecycle", () => {
     expect(held.appointment.status).toBe("held");
     expect(held.appointment.holdExpiresAt).toBeInstanceOf(Date);
 
-    const confirmed = await confirmHold(ctx.db, held.appointment.id);
+    const result = await confirmPaidHold(ctx.db, {
+      appointmentId: held.appointment.id,
+      paymentIntentId: "pi_test_confirm",
+    });
+
+    expect(result.outcome).toBe("confirmed");
+    const confirmed = (result as { appointment: typeof held.appointment }).appointment;
     expect(confirmed.status).toBe("confirmed");
     expect(confirmed.holdExpiresAt).toBeNull();
+    expect(confirmed.stripePaymentIntentId).toBe("pi_test_confirm");
   });
 
   it("confirms a hold whose deadline has passed but whose row survived", async () => {
@@ -274,8 +281,11 @@ describe("hold lifecycle", () => {
 
     // Nothing released it, so the slot stayed reserved the whole time and the
     // hold is still ours. Confirming is the correct outcome, not an error.
-    const confirmed = await confirmHold(ctx.db, held.appointment.id);
-    expect(confirmed.status).toBe("confirmed");
+    const result = await confirmPaidHold(ctx.db, {
+      appointmentId: held.appointment.id,
+    });
+
+    expect(result.outcome).toBe("confirmed");
   });
 
   it("releases a hold and frees the slot immediately", async () => {

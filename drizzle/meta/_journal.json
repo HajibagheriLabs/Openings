@@ -57,6 +57,13 @@
       "when": 1787850690627,
       "tag": "0007_business_manual_capture",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787897238912,
+      "tag": "0008_notifications_payload_and_refunds",
+      "breakpoints": true
     }
   ]
 }

@@ -6,6 +6,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   smallint,
@@ -15,6 +16,8 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+
+import type { NotificationPayload } from "@/lib/notifications/payload";
 
 /* ===========================================================================
    Custom types
@@ -76,6 +79,15 @@ export const notificationKindEnum = pgEnum("notification_kind", [
   "reminder",
   "reschedule",
   "cancellation",
+  /**
+   * The apology. Sent to a customer whose deposit was taken for a slot that
+   * had already gone — the payment landed after the hold lapsed and somebody
+   * else had taken the time. It carries the refund and the nearest openings.
+   * Rare, and the one message in this table that must never be silently lost.
+   */
+  "slot_lost",
+  /** To the OWNER: money went back to a customer. The only kind not addressed to one. */
+  "refund",
 ]);
 
 /** Only email today. The enum exists so adding `sms` is a migration, not a refactor. */
@@ -546,8 +558,30 @@ export const appointments = pgTable(
     priceCents: integer("price_cents").notNull(),
     depositCents: integer("deposit_cents").notNull().default(0),
 
+    /**
+     * Set the moment this appointment is handed to Stripe.
+     *
+     * IT ALSO CHANGES HOW THE ROW DIES. A hold with no session is deleted when
+     * it lapses — it never became anything and is not history worth keeping.
+     * A hold that reached a payment page is CANCELLED instead, because a
+     * payment may still be in flight for it and the webhook needs a row to
+     * refund against, to cancel, and to hang an apology on. A cancelled row
+     * blocks nothing: the exclusion constraint only covers 'held' and
+     * 'confirmed'. See `abandonHold` in src/lib/scheduling/booking.ts.
+     */
     stripeCheckoutSessionId: text("stripe_checkout_session_id"),
     stripePaymentIntentId: text("stripe_payment_intent_id"),
+
+    /**
+     * Money that went back, and when.
+     *
+     * Set by the `charge.refunded` webhook, and set directly by the slot-lost
+     * path when this application initiates the refund itself. `refunded_at`
+     * being present is also how the webhook knows a refund was OURS and does
+     * not need to alarm the owner about it a second time.
+     */
+    refundedAt: timestamp("refunded_at", { withTimezone: true }),
+    refundedCents: integer("refunded_cents"),
 
     /**
      * The iCalendar UID. Stable for the appointment's ENTIRE life — a reschedule
@@ -640,6 +674,18 @@ export const notifications = pgTable(
     /** When this becomes due. A reminder is scheduled relative to starts_at. */
     scheduledFor: timestamp("scheduled_for", { withTimezone: true }).notNull(),
     status: notificationStatusEnum("status").notNull().default("pending"),
+    /**
+     * Facts the message needs that the appointment does not carry.
+     *
+     * The alternatives offered in an apology, the amount that went back on a
+     * refund. Deliberately small and deliberately NOT a rendered message: the
+     * template lives in code and can be fixed after a row is written, which a
+     * pre-rendered body could not be.
+     *
+     * NEVER a secret. The manage-link token is minted when the email is
+     * composed and is not persisted anywhere — the row keeps only its hash.
+     */
+    payload: jsonb("payload").$type<NotificationPayload>(),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
     sentAt: timestamp("sent_at", { withTimezone: true }),

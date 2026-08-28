@@ -34,13 +34,15 @@ import { buildBlockingRange, type BlockingRange } from "./slot";
  *
  * The two-step shape of every write is:
  *
- *   1. DELETE expired holds that would collide — in the SAME transaction.
+ *   1. CLEAR expired holds that would collide — in the SAME transaction.
  *   2. INSERT or UPDATE, and let the constraint decide.
  *
  * Step 1 is mandatory and is not an optimisation. The constraint predicate
  * cannot reference now() (it must be IMMUTABLE), so an expired hold still
- * occupies its slot until a statement physically removes the row. See the long
- * comment in drizzle/0002_appointments_no_overlap.sql.
+ * occupies its slot until a statement moves it out of 'held'. See the long
+ * comment in drizzle/0002_appointments_no_overlap.sql, and the note on
+ * REACHED_CHECKOUT below for why "clear" is sometimes a cancellation rather
+ * than a delete.
  */
 
 /** How long a customer gets to complete checkout before the slot is released. */
@@ -147,38 +149,117 @@ export function manageTokenMatches(token: string, storedHash: string): boolean {
 }
 
 /* ===========================================================================
+   Ending a hold: delete it, or keep it as a cancellation
+   =========================================================================== */
+
+/**
+ * WHY A HOLD IS SOMETIMES CANCELLED RATHER THAN DELETED.
+ *
+ * An ordinary hold that lapses is deleted. It never became anything, nobody
+ * was ever told about it, and keeping it would only make the constraint's index
+ * bigger — `releaseHold` says as much.
+ *
+ * A hold that reached a Stripe payment page is different, and the difference is
+ * money. A payment may still be in flight for it: the customer can be on
+ * Stripe's page at the exact moment their eight minutes run out, and the card
+ * can go through a beat later. If that row had been deleted, the webhook would
+ * arrive holding a payment for an appointment that no longer exists — nothing
+ * to refund against, nothing to cancel, nobody to apologise to, and no way to
+ * tell that case apart from a stray event.
+ *
+ * So a hold with a checkout session becomes `cancelled` instead. It costs
+ * nothing: the exclusion constraint covers only 'held' and 'confirmed', so a
+ * cancelled row blocks no slot and the time is genuinely back in the day. What
+ * it buys is a row for the webhook to find — which is the whole of the
+ * slot-lost path in src/server/payments/webhook.ts.
+ */
+const REACHED_CHECKOUT = sql`(
+  ${appointments.stripeCheckoutSessionId} IS NOT NULL
+  AND ${appointments.customerId} IS NOT NULL
+)`;
+
+/**
+ * Reasons a hold ended, in the words the admin agenda and the apology email
+ * both read. Constants rather than literals because the webhook MATCHES on
+ * them to tell "this slot was swept out from under a payment" from "somebody
+ * cancelled properly", and a typo in one of two copies would be silent.
+ */
+export const CANCELLATION_REASON = {
+  /** The eight minutes ran out while the customer was on Stripe's page. */
+  holdLapsedInCheckout: "The hold expired while checkout was open.",
+  /** They pressed back on Stripe, or the session expired unpaid. */
+  checkoutAbandoned: "Checkout was abandoned before payment.",
+  /** Paid, but the time had already gone to somebody else. Refunded. */
+  slotLostAfterPayment:
+    "The deposit arrived after the slot had been taken by someone else. It was refunded in full.",
+} as const;
+
+/**
+ * Cancel a lapsed hold, keeping the row. Only used where REACHED_CHECKOUT holds.
+ *
+ * The column names are written bare rather than through the Drizzle column
+ * objects: those render as `"appointments"."status"`, and Postgres rejects a
+ * qualified name on the left of a SET — "SET target columns cannot be qualified
+ * with the relation name".
+ */
+function cancelLapsedHold(reason: string) {
+  return sql`
+    status = 'cancelled',
+    hold_expires_at = NULL,
+    cancelled_at = now(),
+    cancelled_by = 'business',
+    cancellation_reason = ${reason}
+  `;
+}
+
+/* ===========================================================================
    Shared SQL
    =========================================================================== */
 
 /**
- * Remove expired holds that would collide with `slot` for this staff member.
+ * Clear expired holds that would collide with `slot` for this staff member.
  *
  * This is the lazy half of hold expiry. It runs inside the caller's
  * transaction, immediately before the write it protects, so there is no window
- * in which another session could slip in between the delete and the insert —
- * and if it deletes nothing, the constraint simply rejects the write, which is
- * the correct outcome.
+ * in which another session could slip in between it and the insert — and if it
+ * clears nothing, the constraint simply rejects the write, which is the correct
+ * outcome.
+ *
+ * TWO STATEMENTS, ONE RULE. See the note on REACHED_CHECKOUT: a lapsed hold
+ * that got as far as a payment page is cancelled so the webhook still has a row
+ * to refund against; every other lapsed hold is deleted. Either way the slot
+ * stops blocking, which is all the caller needs.
  *
  * `excludeAppointmentId` keeps a confirmation from sweeping away the very hold
  * it is trying to confirm.
  */
-function deleteCollidingExpiredHolds(
+async function clearCollidingExpiredHolds(
   tx: Parameters<Parameters<Db["transaction"]>[0]>[0],
   staffId: string,
   slot: string,
   excludeAppointmentId?: string,
 ) {
-  return tx.execute(sql`
+  const lapsed = sql`
+    ${appointments.status} = 'held'
+    AND ${appointments.holdExpiresAt} < now()
+    AND ${appointments.staffId} = ${staffId}
+    AND ${appointments.slot} && ${slot}::tstzrange
+    ${
+      excludeAppointmentId
+        ? sql`AND ${appointments.id} <> ${excludeAppointmentId}`
+        : sql``
+    }
+  `;
+
+  await tx.execute(sql`
+    UPDATE ${appointments}
+       SET ${cancelLapsedHold(CANCELLATION_REASON.holdLapsedInCheckout)}
+     WHERE ${lapsed} AND ${REACHED_CHECKOUT}
+  `);
+
+  await tx.execute(sql`
     DELETE FROM ${appointments}
-     WHERE ${appointments.status} = 'held'
-       AND ${appointments.holdExpiresAt} < now()
-       AND ${appointments.staffId} = ${staffId}
-       AND ${appointments.slot} && ${slot}::tstzrange
-       ${
-         excludeAppointmentId
-           ? sql`AND ${appointments.id} <> ${excludeAppointmentId}`
-           : sql``
-       }
+     WHERE ${lapsed} AND NOT ${REACHED_CHECKOUT}
   `);
 }
 
@@ -300,11 +381,11 @@ async function takeHold(
       // swept while they were deciding, and the thing they actually want is
       // the new slot.
       if (previous) {
-        await deleteOwnHold(tx, previous.appointmentId, previous.manageToken);
+        await endOwnHold(tx, previous.appointmentId, previous.manageToken);
       }
 
       // STEP 1 — clear expired holds that would otherwise block us.
-      await deleteCollidingExpiredHolds(tx, input.staffId, range.slot);
+      await clearCollidingExpiredHolds(tx, input.staffId, range.slot);
 
       // STEP 2 — write, and let the constraint arbitrate.
       const [appointment] = await tx
@@ -358,7 +439,7 @@ async function takeHold(
  * constant-time comparison in Node rather than a SQL equality — see
  * `manageTokenMatches`.
  */
-async function deleteOwnHold(
+async function endOwnHold(
   tx: Parameters<Parameters<Db["transaction"]>[0]>[0],
   appointmentId: string,
   manageToken: string,
@@ -367,6 +448,11 @@ async function deleteOwnHold(
     .select({
       id: appointments.id,
       manageTokenHash: appointments.manageTokenHash,
+      /* Which of the two endings this is. See REACHED_CHECKOUT. */
+      reachedCheckout: sql<boolean>`(
+        ${appointments.stripeCheckoutSessionId} IS NOT NULL
+        AND ${appointments.customerId} IS NOT NULL
+      )`,
     })
     .from(appointments)
     .where(
@@ -378,14 +464,29 @@ async function deleteOwnHold(
     return false;
   }
 
-  const deleted = await tx
-    .delete(appointments)
-    .where(
-      and(eq(appointments.id, appointmentId), eq(appointments.status, "held")),
-    )
-    .returning({ id: appointments.id });
+  const mine = and(
+    eq(appointments.id, appointmentId),
+    eq(appointments.status, "held"),
+  );
 
-  return deleted.length > 0;
+  /* A hold that reached a payment page keeps its row — a payment may still be
+     in flight for it and the webhook has to have something to refund against.
+     Cancelled blocks nothing, so the slot comes back either way. */
+  const ended = row.reachedCheckout
+    ? await tx
+        .update(appointments)
+        .set({
+          status: "cancelled",
+          holdExpiresAt: null,
+          cancelledAt: new Date(),
+          cancelledBy: "business",
+          cancellationReason: CANCELLATION_REASON.checkoutAbandoned,
+        })
+        .where(mine)
+        .returning({ id: appointments.id })
+    : await tx.delete(appointments).where(mine).returning({ id: appointments.id });
+
+  return ended.length > 0;
 }
 
 /**
@@ -411,76 +512,226 @@ async function rebuildRangeForError(
 }
 
 /* ===========================================================================
-   Confirm a hold
+   Confirm a hold — the transaction the whole payment path exists for
    =========================================================================== */
 
 /**
- * Turn a hold into a confirmed appointment.
+ * How far ahead of the appointment the reminder is queued.
  *
- * Called only from the verified Stripe webhook — the success redirect is not
- * proof of payment.
- *
- * NOTE ON EXPIRED-BUT-PRESENT HOLDS: a hold whose `hold_expires_at` has passed
- * but whose row still exists is still ours. Nothing released it, and the
- * constraint kept the slot reserved the whole time, so confirming it is the
- * correct outcome rather than an error. Only a hold that has actually been
- * deleted is lost, and that surfaces as `HoldNotFoundError`. Re-acquiring a
- * lost slot (and refunding when it is genuinely gone) belongs with the payment
- * webhook, not here.
+ * A day. Exported so the scheduler that actually sends it reads the same
+ * number the webhook wrote the row against — a reminder queued against one
+ * lead time and dispatched on another arrives at the wrong hour and looks like
+ * a bug in the product rather than in a constant.
  */
-export async function confirmHold(
+export const REMINDER_LEAD_MINUTES = 24 * 60;
+
+export type ConfirmPaidHoldResult =
+  /** The slot was still ours. Booked, and the outbox rows are written. */
+  | { outcome: "confirmed"; appointment: Appointment }
+  /**
+   * Already booked. A REPLAY, and the correct answer to one: Stripe retries,
+   * and an event delivered twice must produce one appointment and one set of
+   * outbox rows. Nothing is written here.
+   */
+  | { outcome: "already-confirmed"; appointment: Appointment }
+  /**
+   * THE HARD CASE. The hold lapsed and the slot went to somebody else before
+   * this payment reached us. The row survives as a cancellation precisely so
+   * this can be reported rather than guessed at — see REACHED_CHECKOUT. The
+   * caller refunds, apologises, and offers other times.
+   */
+  | { outcome: "slot-lost"; appointment: Appointment }
+  /** No such appointment. A poison event: log it and stop retrying. */
+  | { outcome: "not-found" };
+
+/**
+ * Turn a paid hold into a confirmed appointment — in ONE transaction.
+ *
+ * CALLED ONLY FROM THE VERIFIED STRIPE WEBHOOK. The success redirect is a
+ * browser navigation and proves nothing; this is the only function in the
+ * codebase that may flip an appointment to `confirmed` after a payment, and it
+ * runs behind a signature check.
+ *
+ * Everything below happens together or not at all: re-acquiring the slot,
+ * promoting the row, recording the payment, filling in the calendar identity,
+ * and QUEUEING the messages. That last one is why the transaction has to cover
+ * all of it — a confirmed appointment nobody is ever told about is worse than
+ * a failed booking, and writing the outbox rows in the same transaction makes
+ * that state unrepresentable.
+ *
+ * NOTE ON EXPIRED-BUT-PRESENT HOLDS: a hold whose deadline has passed but whose
+ * row is still `held` is still ours. Nothing released it, the constraint kept
+ * the slot reserved the whole time, and confirming it is correct rather than an
+ * error. The slot is only genuinely lost when something moved the row out of
+ * `held`, which is what `outcome: "slot-lost"` reports.
+ */
+export async function confirmPaidHold(
   db: Db,
-  appointmentId: string,
-): Promise<Appointment> {
+  input: {
+    appointmentId: string;
+    /** Stripe's PaymentIntent, recorded so a later refund can be matched. */
+    paymentIntentId?: string | null;
+    /** One clock for the whole transaction. */
+    now?: Date;
+  },
+): Promise<ConfirmPaidHoldResult> {
+  const now = input.now ?? new Date();
+
   try {
     return await db.transaction(async (tx) => {
-      // STEP 1 — clear expired holds from OTHER bookings that overlap this one.
-      // Correlated against the target row so it is a single statement.
-      await tx.execute(sql`
-        DELETE FROM ${appointments} AS victim
-         USING ${appointments} AS target
-         WHERE target.id = ${appointmentId}
-           AND victim.status = 'held'
-           AND victim.hold_expires_at < now()
-           AND victim.staff_id = target.staff_id
-           AND victim.slot && target.slot
-           AND victim.id <> target.id
-      `);
+      /**
+       * FOR UPDATE, and it is not decoration.
+       *
+       * Two deliveries of the same event can arrive concurrently — Stripe
+       * retries on timeout, and the first attempt may still be running. The
+       * row lock makes the second one wait and then read `confirmed`, so it
+       * returns a replay instead of queueing a second confirmation email.
+       */
+      const [held] = await tx
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, input.appointmentId))
+        .limit(1)
+        .for("update");
 
-      // STEP 2 — promote the hold. The constraint re-checks on update.
+      if (!held) {
+        return { outcome: "not-found" as const };
+      }
+
+      if (held.status === "confirmed") {
+        return { outcome: "already-confirmed" as const, appointment: held };
+      }
+
+      if (held.status !== "held" || held.customerId === null) {
+        /* Cancelled by the sweep while the payment was in flight, or in some
+           other state entirely. Either way this booking is not happening and
+           the caller owes the customer their money back. */
+        return { outcome: "slot-lost" as const, appointment: held };
+      }
+
+      /* STEP 1 — clear lapsed holds from OTHER bookings overlapping this one,
+         so a neighbour that expired cannot make the promotion fail. */
+      await clearCollidingExpiredHolds(tx, held.staffId, held.slot, held.id);
+
+      /* STEP 2 — promote it. `WHERE status = 'held'` is the second half of the
+         lock: if anything moved the row between the read and here, zero rows
+         update and the whole transaction rolls back rather than half-booking. */
       const [appointment] = await tx
         .update(appointments)
-        .set({ status: "confirmed", holdExpiresAt: null })
+        .set({
+          status: "confirmed",
+          holdExpiresAt: null,
+          stripePaymentIntentId: input.paymentIntentId ?? null,
+          /**
+           * The calendar identity, filled in only when it is missing.
+           *
+           * `ics_uid` is STABLE FOR THE APPOINTMENT'S WHOLE LIFE — a reschedule
+           * reuses it and bumps the sequence, which is how a calendar client
+           * knows to update the existing event instead of adding a second one.
+           * Regenerating it here would leave a stale duplicate in somebody's
+           * calendar forever, so a hold that already has one keeps it and only
+           * an appointment created without one gets a new one.
+           */
+          icsUid: held.icsUid || `${randomUUID()}@${ICS_UID_DOMAIN}`,
+          /**
+           * Same for the manage token. The row already carries the SHA-256 of
+           * the one this browser holds, and the plaintext is not ours to know
+           * — it was returned once, at hold time, and never stored. A fresh
+           * token is minted when the confirmation email is composed, so it
+           * lives in the message rather than in the database. This branch only
+           * covers a row that somehow arrived without a hash at all.
+           */
+          manageTokenHash:
+            held.manageTokenHash ||
+            hashManageToken(randomBytes(32).toString("base64url")),
+        })
         .where(
           and(
-            eq(appointments.id, appointmentId),
+            eq(appointments.id, input.appointmentId),
             eq(appointments.status, "held"),
           ),
         )
         .returning();
 
       if (!appointment) {
-        throw new HoldNotFoundError(appointmentId);
+        throw new HoldNotFoundError(input.appointmentId);
       }
 
-      return appointment;
+      /**
+       * STEP 3 — THE OUTBOX. Rows, not sends.
+       *
+       * Nothing is emailed here. The webhook has to be fast and idempotent,
+       * and neither survives an HTTP call to an email provider inside it: a
+       * slow Resend would push Stripe past its timeout and earn a retry that
+       * then has to be recognised as a duplicate, and a send that failed inside
+       * the transaction would roll back a payment already taken.
+       *
+       * So the intent is written down and a worker delivers it. A provider
+       * outage becomes a pending row to retry and a visible state in the admin
+       * area, rather than a confirmation that silently never arrived — which,
+       * in a booking product, is the difference between a working business and
+       * an angry phone call.
+       */
+      const [customer] = await tx
+        .select({ email: customers.email })
+        .from(customers)
+        .where(eq(customers.id, appointment.customerId!))
+        .limit(1);
+
+      if (customer) {
+        const reminderAt = new Date(
+          appointment.startsAt.getTime() - REMINDER_LEAD_MINUTES * 60_000,
+        );
+
+        await tx.insert(notifications).values([
+          {
+            appointmentId: appointment.id,
+            kind: "confirmation",
+            channel: "email",
+            toEmail: customer.email,
+            scheduledFor: now,
+          },
+          /* A booking made inside the lead time has no reminder to give: the
+             appointment is sooner than the reminder would be. Queueing one for
+             a moment already past would send it immediately, a minute after the
+             confirmation, which reads as a duplicate. */
+          ...(reminderAt.getTime() > now.getTime()
+            ? [
+                {
+                  appointmentId: appointment.id,
+                  kind: "reminder" as const,
+                  channel: "email" as const,
+                  toEmail: customer.email,
+                  scheduledFor: reminderAt,
+                },
+              ]
+            : []),
+        ]);
+      }
+
+      return { outcome: "confirmed" as const, appointment };
     });
   } catch (error) {
+    /**
+     * The constraint refused the promotion.
+     *
+     * Vanishingly unlikely — this row is already in the constraint's index
+     * with this exact range, so nothing overlapping it can exist — but if it
+     * ever happens the answer is the same as any other lost slot, and the
+     * caller's refund path handles it.
+     */
     if (isExclusionViolation(error)) {
       const [row] = await db
         .select()
         .from(appointments)
-        .where(eq(appointments.id, appointmentId))
+        .where(eq(appointments.id, input.appointmentId))
         .limit(1);
 
-      throw new SlotTakenError({
-        staffId: row?.staffId ?? "unknown",
-        serviceId: row?.serviceId ?? "unknown",
-        startsAt: row?.startsAt ?? new Date(0),
-        endsAt: row?.endsAt ?? new Date(0),
-        slot: row?.slot ?? "",
-      });
+      return row
+        ? { outcome: "slot-lost", appointment: row }
+        : { outcome: "not-found" };
     }
+
     throw error;
   }
 }
@@ -491,24 +742,64 @@ export async function confirmHold(
 
 /**
  * Give a held slot back immediately — the customer abandoned checkout, or the
- * Stripe session expired.
+ * Stripe session expired unpaid.
  *
- * Deletes rather than cancels: a hold that never became an appointment is not
- * history worth keeping, and deleting takes it out of the constraint's index
- * at once. Returns false if there was nothing held to release.
+ * A thin name over `abandonHold`, kept because "release this hold" is what the
+ * callers mean and the two-ending rule is an implementation detail of it.
  */
 export async function releaseHold(
   db: Db,
   appointmentId: string,
 ): Promise<boolean> {
-  const released = await db
-    .delete(appointments)
-    .where(
-      and(eq(appointments.id, appointmentId), eq(appointments.status, "held")),
-    )
-    .returning({ id: appointments.id });
+  return abandonHold(db, appointmentId, CANCELLATION_REASON.checkoutAbandoned);
+}
 
-  return released.length > 0;
+/**
+ * End a hold by id, whatever it takes, and give the slot back.
+ *
+ * The one entry point for "this hold is over and nobody paid": the customer
+ * left, or Stripe told us the session expired unpaid. Deletes an ordinary
+ * hold and CANCELS one that reached a payment page — see REACHED_CHECKOUT for
+ * why that distinction is worth a second statement.
+ *
+ * Returns false if there was nothing held to end, which is not an error: it is
+ * what a replayed `checkout.session.expired` looks like, and what a hold that
+ * already lapsed and was swept looks like.
+ */
+export async function abandonHold(
+  db: Db,
+  appointmentId: string,
+  reason: string,
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const mine = and(
+      eq(appointments.id, appointmentId),
+      eq(appointments.status, "held"),
+    );
+
+    const cancelled = await tx
+      .update(appointments)
+      .set({
+        status: "cancelled",
+        holdExpiresAt: null,
+        cancelledAt: new Date(),
+        cancelledBy: "business",
+        cancellationReason: reason,
+      })
+      .where(and(mine, sql`${REACHED_CHECKOUT}`))
+      .returning({ id: appointments.id });
+
+    if (cancelled.length > 0) {
+      return true;
+    }
+
+    const deleted = await tx
+      .delete(appointments)
+      .where(mine)
+      .returning({ id: appointments.id });
+
+    return deleted.length > 0;
+  });
 }
 
 /**
@@ -531,7 +822,7 @@ export async function releaseHoldByToken(
   manageToken: string,
 ): Promise<boolean> {
   return db.transaction((tx) =>
-    deleteOwnHold(tx, appointmentId, manageToken),
+    endOwnHold(tx, appointmentId, manageToken),
   );
 }
 
@@ -770,15 +1061,15 @@ export async function readOwnAppointment(
 }
 
 /**
- * The janitor. Deletes every hold whose deadline has passed.
+ * The janitor. Clears every hold whose deadline has passed.
  *
  * CORRECTNESS NEVER DEPENDS ON THIS RUNNING.
  *
  * If this function were deleted tomorrow and the nightly cron switched off,
  * the product would still never double-book and would still never show an
  * expired hold as unavailable, because:
- *   - every booking transaction deletes colliding expired holds before it
- *     writes (see `deleteCollidingExpiredHolds`), and
+ *   - every booking transaction clears colliding expired holds before it
+ *     writes (see `clearCollidingExpiredHolds`), and
  *   - every availability query treats a hold past its deadline as free.
  *
  * All this does is keep dead rows from accumulating, so the constraint's index
@@ -788,15 +1079,26 @@ export async function readOwnAppointment(
  * Returns the number of rows reclaimed.
  */
 export async function reclaimExpiredHolds(db: Db): Promise<number> {
-  const reclaimed = await db
-    .delete(appointments)
-    .where(
-      and(
-        eq(appointments.status, "held"),
-        sql`${appointments.holdExpiresAt} < now()`,
-      ),
-    )
-    .returning({ id: appointments.id });
+  return db.transaction(async (tx) => {
+    const lapsed = sql`
+      ${appointments.status} = 'held'
+      AND ${appointments.holdExpiresAt} < now()
+    `;
 
-  return reclaimed.length;
+    /* Same rule as everywhere else: a hold that reached a payment page keeps
+       its row as a cancellation, because a payment may still be in flight for
+       it. Everything else goes. See REACHED_CHECKOUT. */
+    const cancelled = await tx.execute(sql`
+      UPDATE ${appointments}
+         SET ${cancelLapsedHold(CANCELLATION_REASON.holdLapsedInCheckout)}
+       WHERE ${lapsed} AND ${REACHED_CHECKOUT}
+    `);
+
+    const deleted = await tx.execute(sql`
+      DELETE FROM ${appointments}
+       WHERE ${lapsed} AND NOT ${REACHED_CHECKOUT}
+    `);
+
+    return (cancelled.rowCount ?? 0) + (deleted.rowCount ?? 0);
+  });
 }
