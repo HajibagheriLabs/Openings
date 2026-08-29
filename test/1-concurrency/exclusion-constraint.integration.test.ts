@@ -17,7 +17,7 @@ import {
   expireHold,
   setupTestDatabase,
   type TestContext,
-} from "./helpers/database";
+} from "../helpers/database";
 
 /**
  * The headline tests of this repository.

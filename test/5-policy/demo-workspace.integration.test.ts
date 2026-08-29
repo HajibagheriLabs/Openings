@@ -10,7 +10,7 @@ import {
   clearAppointments,
   setupTestDatabase,
   type TestContext,
-} from "./helpers/database";
+} from "../helpers/database";
 
 /**
  * The demo workspace's guarantees, against a real Postgres.

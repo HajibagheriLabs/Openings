@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { composeNotification } from "@/lib/notifications/compose";
 import { ICS_PRODID } from "@/lib/notifications/invite";
 
-import { ICS_UID, subjectFor } from "./helpers/notification";
+import { ICS_UID, subjectFor } from "../helpers/notification";
 
 /**
  * The invite lifecycle, parsed rather than eyeballed.

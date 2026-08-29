@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { composeNotification } from "@/lib/notifications/compose";
 import type { NotificationKind } from "@/db/schema";
 
-import { subjectFor } from "./helpers/notification";
+import { subjectFor } from "../helpers/notification";
 
 /**
  * Every template, rendered, and asserted on the facts that matter.

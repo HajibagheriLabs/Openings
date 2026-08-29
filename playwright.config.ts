@@ -1,0 +1,113 @@
+import { defineConfig, devices } from "@playwright/test";
+
+import { e2eDatabaseUrl } from "./e2e/fixtures/database";
+
+/**
+ * The browser suite: one path, the one where money changes hands.
+ *
+ * ═══ IT RUNS AGAINST A PRODUCTION BUILD ═══
+ *
+ * `next dev` compiles on demand, so the first navigation to a route can take
+ * seconds and a timeout becomes a coin toss rather than a signal. `next build`
+ * then `next start` is what the deployment runs, it is what a Server Action
+ * behaves like when it is not being recompiled, and it makes the suite's
+ * timings mean something.
+ *
+ * ═══ THE MAILER IS STUBBED BY CONFIGURATION, NOT BY A MOCK ═══
+ *
+ * `RESEND_API_KEY` is blanked below, and the mailer's own console fallback
+ * takes over — the same fallback a developer runs on all day. No test double,
+ * no module interception, and the outbox rows the booking writes are real
+ * rows written by the real code. What is skipped is one HTTP call to Resend,
+ * which is exactly the part that is not ours.
+ *
+ * ═══ THE DATABASE IS NEVER THE DEVELOPMENT ONE ═══
+ *
+ * The fixture deletes its business by slug and rebuilds it, so the server
+ * under test is pointed at `E2E_DATABASE_URL` / `TEST_DATABASE_URL`. In CI
+ * both are the same throwaway container.
+ */
+
+const PORT = Number(process.env.E2E_PORT ?? 3100);
+const BASE_URL = `http://127.0.0.1:${PORT}`;
+
+/** Resolved once, and shared with the server the suite starts. */
+const DATABASE_URL = e2eDatabaseUrl();
+
+export default defineConfig({
+  testDir: "./e2e",
+  /* The specs share one fixture business and book into the same day, so they
+     must not race each other for a slot. One worker, in order. */
+  fullyParallel: false,
+  workers: 1,
+  forbidOnly: Boolean(process.env.CI),
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+
+  globalSetup: "./e2e/global-setup.ts",
+
+  timeout: 90_000,
+  expect: { timeout: 15_000 },
+
+  use: {
+    baseURL: BASE_URL,
+    /* Kept only for a failure. A trace per run is megabytes of artefact for a
+       suite that is green almost every time. */
+    trace: "retain-on-failure",
+    video: "off",
+    screenshot: "only-on-failure",
+  },
+
+  projects: [
+    {
+      name: "chromium",
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
+
+  webServer: {
+    command: `npm run build && npx next start --port ${PORT}`,
+    url: BASE_URL,
+    /* A cold Next build. Generous on purpose: a build that takes 100 seconds
+       is slow, not broken, and a flaky timeout here would be blamed on the
+       application. */
+    timeout: 300_000,
+    reuseExistingServer: !process.env.CI,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: {
+      DATABASE_URL,
+      NODE_ENV: "production",
+      /* The origin everything must agree on: Better Auth's callbacks, the
+         links in email, and Stripe's redirect back. */
+      BETTER_AUTH_URL: BASE_URL,
+      NEXT_PUBLIC_APP_URL: BASE_URL,
+      BETTER_AUTH_SECRET:
+        process.env.BETTER_AUTH_SECRET ??
+        "e2e-secret-not-used-for-anything-real-0123456789",
+      /* Blank: the mailer prints to the console instead of calling Resend. */
+      RESEND_API_KEY: "",
+      /* Blank: nothing is scheduled, so the daily sweep owns every message.
+         The E2E never waits for one. */
+      QSTASH_TOKEN: "",
+      /**
+       * PASSED THROUGH WHEN PRESENT, absent otherwise — and the suite adapts
+       * rather than failing. With a key the deposit path goes to Stripe and
+       * the card spec runs; without one the deposit is skipped and only the
+       * free path runs. See e2e/stripe-card.spec.ts.
+       */
+      ...(process.env.STRIPE_SECRET_KEY
+        ? { STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY }
+        : {}),
+      ...(process.env.STRIPE_WEBHOOK_SECRET
+        ? { STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET }
+        : {}),
+      ...(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
+        ? {
+            NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:
+              process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+          }
+        : {}),
+    },
+  },
+});

@@ -13,7 +13,10 @@
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
+    "test:unit": "vitest run --exclude \"test/**/*.integration.test.ts\"",
+    "test:integration": "vitest run .integration.test.ts",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "email": "email dev --dir emails --port 3001",
     "db:seed": "node --experimental-transform-types --disable-warning=ExperimentalWarning --import ./scripts/loader.mjs scripts/seed.ts",
     "db:generate": "drizzle-kit generate",
@@ -47,6 +50,7 @@
     "zod": "4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "1.62.1",
     "@tailwindcss/postcss": "4.3.3",
     "@types/node": "24.13.3",
     "@types/pg": "8.23.1",

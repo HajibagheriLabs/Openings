@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "@/db/client";
 import { availabilityRules, serviceStaff, timeOff } from "@/db/schema";
 import { loadMonthSummary } from "@/lib/scheduling/month-summary";
-import { setupTestDatabase, type TestContext } from "./helpers/database";
+import { setupTestDatabase, type TestContext } from "../helpers/database";
 
 /**
  * The month the booking calendar draws.

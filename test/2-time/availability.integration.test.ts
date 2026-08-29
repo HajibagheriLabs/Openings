@@ -6,7 +6,7 @@ import { availabilityRules, serviceStaff, timeOff } from "@/db/schema";
 import { getAvailability } from "@/lib/scheduling/availability";
 import { buildBlockingRange } from "@/lib/scheduling/slot";
 import { resolveTimeOffRange } from "@/lib/scheduling/time-off";
-import { setupTestDatabase, type TestContext } from "./helpers/database";
+import { setupTestDatabase, type TestContext } from "../helpers/database";
 
 /**
  * The LOADER half of the availability algorithm.

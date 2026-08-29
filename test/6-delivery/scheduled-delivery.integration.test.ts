@@ -15,7 +15,7 @@ import type { ScheduleOutcome, Scheduler } from "@/lib/notifications/scheduler";
 import { drainNotifications } from "@/lib/notifications/worker";
 import { claimHold, createHold } from "@/lib/scheduling/booking";
 
-import { clearAppointments, setupTestDatabase } from "./helpers/database";
+import { clearAppointments, setupTestDatabase } from "../helpers/database";
 
 /**
  * Scheduled delivery, end to end, against a real database.

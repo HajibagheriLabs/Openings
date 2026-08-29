@@ -5,7 +5,7 @@ import type { Db } from "@/db/client";
 import { availabilityRules, timeOff } from "@/db/schema";
 import { buildBlockingRange } from "@/lib/scheduling/slot";
 import { resolveTimeOffRange } from "@/lib/scheduling/time-off";
-import { setupTestDatabase, type TestContext } from "./helpers/database";
+import { setupTestDatabase, type TestContext } from "../helpers/database";
 
 /**
  * The parts of hours and time off that only Postgres can confirm.

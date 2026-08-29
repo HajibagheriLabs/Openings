@@ -18,7 +18,7 @@ import {
   rateLimitKey,
 } from "@/server/booking/rate-limit";
 
-import { at, clearAppointments, setupTestDatabase } from "./helpers/database";
+import { at, clearAppointments, setupTestDatabase } from "../helpers/database";
 
 /**
  * The guest self-service page, against a real database.

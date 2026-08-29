@@ -1,0 +1,167 @@
+name: CI
+
+# Every push to the default branch, and every pull request. Nothing on a
+# schedule: a job that fails at 3am for a reason nobody introduced teaches
+# people to ignore the badge.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push supersedes the first. Two runs of the same branch would
+# otherwise queue behind each other and race for the same database container.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every job needs these to import the application at all, and none of them is
+  # a secret: the database is a container that lives for one job, and the auth
+  # secret signs sessions nobody will ever hold.
+  DATABASE_URL: postgres://postgres:postgres@localhost:5432/openings
+  TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openings_test
+  BETTER_AUTH_SECRET: ci-secret-not-used-for-anything-real-0123456789
+  BETTER_AUTH_URL: http://127.0.0.1:3100
+  NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Static checks. No database, no browser — so it finishes while the suites
+  # below are still starting their containers, and a type error is reported in
+  # under a minute rather than after five.
+  # ---------------------------------------------------------------------------
+  check:
+    name: Typecheck and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run lint
+
+  # ---------------------------------------------------------------------------
+  # The suite, against a real Postgres.
+  #
+  # A REAL DATABASE IS NOT OPTIONAL HERE. The guarantee this project is built
+  # around — that two customers cannot take one slot — is an exclusion
+  # constraint over a GiST index, and there is no mock of Postgres that can
+  # check it. `postgres:17` ships btree_gist as a bundled contrib extension, so
+  # migration 0000's `CREATE EXTENSION` works with nothing installed.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Unit and integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openings
+        ports:
+          - 5432:5432
+        # Without this the first connection races the container's startup and
+        # the whole job fails on a connection refused, intermittently.
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The integration suite truncates tables, so it refuses to share a
+      # database with anything else — including the one the app would use.
+      - name: Create the test database
+        run: psql "$DATABASE_URL" -c 'CREATE DATABASE openings_test'
+
+      - name: Confirm btree_gist is available
+        # Proved before the suite runs, so "the constraint is not being
+        # enforced" can never be mistaken for "the tests pass".
+        run: |
+          psql "$TEST_DATABASE_URL" -c 'CREATE EXTENSION IF NOT EXISTS btree_gist'
+          psql "$TEST_DATABASE_URL" -c "SELECT extname FROM pg_extension WHERE extname = 'btree_gist'" | grep btree_gist
+
+      - run: npm run test:unit
+
+      - run: npm run test:integration
+
+  # ---------------------------------------------------------------------------
+  # The browser suite. Its own job so a Playwright failure is legible on its
+  # own, and so the browser download does not slow the checks above.
+  #
+  # No Stripe keys: the card spec skips itself and says so. What runs is the
+  # whole booking journey, and the assertion that the slot is gone for a second
+  # browser context.
+  # ---------------------------------------------------------------------------
+  e2e:
+    name: End to end
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: openings
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The browser suite seeds and deletes its own business, so it is pointed
+      # at a database of its own even here, where everything is disposable.
+      E2E_DATABASE_URL: postgres://postgres:postgres@localhost:5432/openings_e2e
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Create the browser suite's database
+        run: psql "$DATABASE_URL" -c 'CREATE DATABASE openings_e2e'
+
+      # Chromium only. Three engines is three downloads for a suite whose job
+      # is to prove the wiring, not to survey rendering.
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run test:e2e
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

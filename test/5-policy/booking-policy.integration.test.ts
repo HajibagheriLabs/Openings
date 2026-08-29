@@ -11,7 +11,7 @@ import {
   checkRateLimit,
   findOverlappingConfirmed,
 } from "@/server/booking/policy";
-import { setupTestDatabase, type TestContext } from "./helpers/database";
+import { setupTestDatabase, type TestContext } from "../helpers/database";
 
 /**
  * The policy layer, and the free-consultation path.

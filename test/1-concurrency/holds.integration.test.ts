@@ -12,7 +12,7 @@ import {
   SlotTakenError,
 } from "@/lib/scheduling/booking";
 import { loadDayView } from "@/lib/scheduling/day-view";
-import { setupTestDatabase, type TestContext } from "./helpers/database";
+import { setupTestDatabase, type TestContext } from "../helpers/database";
 
 /**
  * The hold, end to end.

@@ -51,10 +51,34 @@ npm run dev
 | `npm run start`     | Serve the production build                    |
 | `npm run typecheck` | Generate route types, then `tsc --noEmit`     |
 | `npm run lint`      | ESLint                                        |
-| `npm run test`      | Vitest (integration files need `TEST_DATABASE_URL`) |
+| `npm run test`      | Every Vitest file                             |
+| `npm run test:unit` | No database. Under ten seconds                |
+| `npm run test:integration` | Needs `TEST_DATABASE_URL`              |
+| `npm run test:e2e`  | Playwright. Needs `E2E_DATABASE_URL`          |
 | `npm run email`     | React Email preview on http://localhost:3001  |
 | `npm run db:migrate` | Apply migrations                             |
 | `npm run db:seed`   | Build the demo workspace                      |
+
+## Tests
+
+The suite is ordered by what it would cost to get wrong, and the directory
+names are the order: `1-concurrency`, `2-time`, `3-payments`, `4-invites`,
+`5-policy`, `6-delivery`. Coverage is not the goal — see
+[test/README.md](test/README.md), which also lists what is deliberately not
+tested and why.
+
+The integration files run against a real Postgres with `btree_gist`, because
+the guarantee this project is built around is an exclusion constraint and there
+is no mock of Postgres that can check one. They truncate tables between cases,
+so `TEST_DATABASE_URL` is required and must differ from `DATABASE_URL`.
+
+`e2e/` is Playwright: the one path where money changes hands, through a real
+browser, ending with a second browser context confirming the slot is gone. The
+card step runs when Stripe test keys are present and skips with a reason when
+they are not.
+
+CI runs on every push and pull request: typecheck and lint, then the unit and
+integration suites against a Postgres service container, then Playwright.
 
 ## The demo workspace
 

@@ -35,7 +35,7 @@ import {
   requireTestDatabaseUrl,
   setupTestDatabase,
   type TestContext,
-} from "./helpers/database";
+} from "../helpers/database";
 
 /**
  * The webhook, end to end, against a real database and a mocked Stripe.

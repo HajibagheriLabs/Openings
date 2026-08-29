@@ -12,7 +12,7 @@ import {
 } from "@/lib/notifications/worker";
 import { createHold } from "@/lib/scheduling/booking";
 
-import { at, clearAppointments, setupTestDatabase } from "./helpers/database";
+import { at, clearAppointments, setupTestDatabase } from "../helpers/database";
 
 /**
  * The outbox worker, against a real Postgres.
