@@ -342,14 +342,32 @@ describe("claiming a hold", () => {
     expect(claimed.appointment.customerNote).toBe("Wheelchair access, please.");
     expect(claimed.appointment.policyAcceptedAt).not.toBeNull();
 
-    /* The confirmation email is a ROW, not a send. A Resend outage must not be
-       able to roll back a confirmed appointment. */
+    /* The emails are ROWS, not sends. A Resend outage must not be able to roll
+       back a confirmed appointment.
+
+       THREE OF THEM, and the same three the paid path writes: a booking with no
+       deposit is still a booking. The customer gets a confirmation now and a
+       reminder the day before, and the OWNER hears about it — a business that
+       only learns about a booking when somebody walks in will eventually
+       double-book its own diary by hand. */
     const queued = await db.select().from(notifications);
 
-    expect(queued).toHaveLength(1);
-    expect(queued[0].kind).toBe("confirmation");
-    expect(queued[0].toEmail).toBe("sam@example.test");
-    expect(queued[0].status).toBe("pending");
+    expect(queued.map((row) => row.kind).sort()).toEqual([
+      "confirmation",
+      "new_booking",
+      "reminder",
+    ]);
+
+    const customerRows = queued.filter((row) => row.kind !== "new_booking");
+
+    expect(customerRows.every((row) => row.toEmail === "sam@example.test")).toBe(
+      true,
+    );
+    /* The owner's copy goes to the business, never to the customer. */
+    expect(queued.find((row) => row.kind === "new_booking")?.toEmail).toBe(
+      "hello@example.test",
+    );
+    expect(queued.every((row) => row.status === "pending")).toBe(true);
   });
 
   it("leaves the appointment held when a deposit is due", async () => {

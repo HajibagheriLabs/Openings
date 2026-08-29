@@ -43,8 +43,37 @@ import {
  * the form has parsed.
  */
 
+/**
+ * A zone the runtime actually recognises, or nothing.
+ *
+ * The browser sends `Intl.DateTimeFormat().resolvedOptions().timeZone`, which
+ * is normally a clean IANA identifier — but it arrives over a Server Action,
+ * which is a public HTTP endpoint, so it is checked by ASKING THE PLATFORM
+ * rather than by a pattern. Constructing a formatter is the only test that
+ * agrees with what the formatter will later do with the value.
+ *
+ * An unrecognised zone is dropped rather than refused. It affects one
+ * courtesy line in one email; throwing away a booking over it would be
+ * absurd.
+ */
+const timeZoneSchema = z
+  .string()
+  .max(64)
+  .refine((value) => {
+    try {
+      new Intl.DateTimeFormat("en-GB", { timeZone: value });
+      return true;
+    } catch {
+      return false;
+    }
+  })
+  .nullish()
+  .catch(null);
+
 const submitSchema = bookingDetailsSchema.extend({
   slug: z.string().min(1).max(64),
+  /** The customer's own zone, for the second time line in their confirmation. */
+  timeZone: timeZoneSchema,
 });
 
 /** The generic failure. An exception message never reaches a customer. */
@@ -199,6 +228,10 @@ export async function submitDetails(
       name: details.name,
       email: details.email,
       phone: details.phone === "" ? null : details.phone,
+      /* Never the business's zone as a stand-in. An absent answer means the
+         email prints one time instead of two, which is correct; guessing would
+         print a second time that is a lie. */
+      timeZone: details.timeZone ?? null,
     },
     customerNote: details.note === "" ? null : details.note,
     policyAcceptedAt: now,

@@ -51,7 +51,22 @@ npm run dev
 | `npm run start`     | Serve the production build                    |
 | `npm run typecheck` | Generate route types, then `tsc --noEmit`     |
 | `npm run lint`      | ESLint                                        |
+| `npm run test`      | Vitest (integration files need `TEST_DATABASE_URL`) |
 | `npm run email`     | React Email preview on http://localhost:3001  |
+
+## Email and calendar invites
+
+Nothing is emailed inline with a booking. A booking transaction writes a row to `notifications` and
+commits; a worker drains it, so a mail-provider outage can never roll back a confirmed appointment.
+Drain it with `POST /api/notifications/drain`, authorized by `CRON_SECRET` as a bearer token — that
+is the endpoint the reminder scheduler and the daily cron both call.
+
+Every confirmation, reschedule and cancellation carries a calendar invitation with **one UID for the
+appointment's whole life** and a **SEQUENCE that increments on every change**, so a rescheduled
+appointment moves in the customer's calendar instead of appearing twice. A cancellation sends
+`METHOD:CANCEL` and never a stale copy of the old invite alongside it. Because attachment handling
+varies wildly between clients, each message also carries a hosted `.ics` link
+(`/ics/[appointmentId]`) and a Google Calendar link.
 
 ## Design
 

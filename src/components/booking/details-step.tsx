@@ -160,7 +160,20 @@ export function DetailsStep({
     }
 
     startTransition(async () => {
-      const result = await submitDetails({ ...parsed.data, slug });
+      const result = await submitDetails({
+        ...parsed.data,
+        slug,
+        /**
+         * The one thing the browser knows that the server cannot ask for: the
+         * visitor's own timezone. It is not a form field and never becomes
+         * one — nobody should be asked to pick their timezone off a list to
+         * book a haircut — and it changes nothing about the appointment. It
+         * buys one line in the confirmation email: the same instant, said
+         * again in the reader's own clock, clearly labelled, for the customer
+         * who is booking from another country.
+         */
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || null,
+      });
 
       if (result.ok) {
         if (result.outcome === "confirmed") {

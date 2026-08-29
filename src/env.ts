@@ -8,12 +8,16 @@ import { z } from "zod";
  * instead of handing `undefined` to the Stripe client three requests later.
  *
  * Two schemas, because the boundary matters:
- *  - `serverEnv` holds secrets, is parsed lazily on first read, and refuses to
- *    be read in the browser at all. See the note on `readServerEnv`.
+ *  - `serverEnv` holds secrets and refuses to be read in the browser at all.
+ *    See the note on `readServerEnv`.
  *  - `clientEnv` holds only `NEXT_PUBLIC_*` values. Those are read through
  *    literal `process.env.NEXT_PUBLIC_...` expressions below because Next
  *    inlines them at build time by textual substitution — dynamic lookup
  *    would produce `undefined` in the browser.
+ *
+ * BOTH are parsed lazily, on first property access. Importing a module is not
+ * the same as needing its configuration, and a pure function should not be
+ * unreachable from a test because a variable it never reads is unset.
  *
  * Optional values are optional on purpose: the app is meant to run on a laptop
  * with nothing but a database. What each one degrades to is noted inline.
@@ -154,14 +158,43 @@ export const serverEnv: ServerEnv = new Proxy({} as ServerEnv, {
     Object.getOwnPropertyDescriptor(readServerEnv(), property),
 });
 
-/** Browser-safe configuration. Read literally so Next can inline the values. */
-export const clientEnv = parse(
-  clientSchema,
-  {
-    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
-    NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:
-      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
-  },
-  "client",
-);
+let clientEnvCache: ClientEnv | null = null;
+
+/**
+ * Read LITERALLY, so Next can inline the values.
+ *
+ * Next replaces the text `process.env.NEXT_PUBLIC_X` with a string constant at
+ * build time. That substitution is textual, so it happens whether the
+ * expression sits at module scope or inside a function — which means this can
+ * be deferred without losing the inlining.
+ */
+function readClientEnv(): ClientEnv {
+  return (clientEnvCache ??= parse(
+    clientSchema,
+    {
+      NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY:
+        process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
+    },
+    "client",
+  ));
+}
+
+/**
+ * Browser-safe configuration.
+ *
+ * LAZY, for the same reason `serverEnv` is. Importing a module is not the same
+ * as needing its configuration: a unit test that pulls in one pure function
+ * from a file that happens to sit next to a configured one should not die
+ * because NEXT_PUBLIC_APP_URL is unset in the shell. Parsing on first property
+ * access keeps the loud, complete error message for anything that genuinely
+ * reads a value, and costs nothing for anything that does not.
+ */
+export const clientEnv: ClientEnv = new Proxy({} as ClientEnv, {
+  get: (_target, property) => readClientEnv()[property as keyof ClientEnv],
+  has: (_target, property) => property in readClientEnv(),
+  ownKeys: () => Reflect.ownKeys(readClientEnv()),
+  getOwnPropertyDescriptor: (_target, property) =>
+    Object.getOwnPropertyDescriptor(readClientEnv(), property),
+});
 

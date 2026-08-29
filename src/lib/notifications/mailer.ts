@@ -18,6 +18,24 @@ import { serverEnv } from "@/env";
  * repository and complete an account without registering for anything.
  */
 
+/**
+ * The single calendar part a message may carry.
+ *
+ * SINGULAR, AND THAT IS THE RULE. One `text/calendar` part, with its `method`
+ * in the content type, is what makes Gmail, Apple Mail and Outlook render an
+ * invitation with buttons on it. Add a second attachment of any kind and most
+ * of them fall back to a paperclip and a file, which is not an invitation at
+ * all. See src/lib/notifications/invite.ts.
+ */
+export interface CalendarPart {
+  /** `invite.ics`. */
+  filename: string;
+  /** `text/calendar; charset=utf-8; method=REQUEST` — the method is required. */
+  contentType: string;
+  /** The iCalendar text itself. */
+  content: string;
+}
+
 export interface OutboundEmail {
   /** A single recipient. Transactional mail here never has more. */
   to: string;
@@ -25,6 +43,8 @@ export interface OutboundEmail {
   html: string;
   /** Plain-text alternative. Never optional — it is what spam filters read. */
   text: string;
+  /** An invitation or a cancellation, for the messages that carry one. */
+  calendar?: CalendarPart | null;
 }
 
 export interface Mailer {
@@ -51,6 +71,17 @@ class ConsoleMailer implements Mailer {
         `subject: ${email.subject}`,
         "",
         email.text,
+        /* The .ics is printed in full, never summarised. It is the part of a
+           booking product that is hardest to eyeball and easiest to get subtly
+           wrong, and somebody running without an email provider should be able
+           to read the UID and the SEQUENCE straight out of their terminal. */
+        ...(email.calendar
+          ? [
+              "",
+              `──── ${email.calendar.filename} (${email.calendar.contentType}) ────`,
+              email.calendar.content.trimEnd(),
+            ]
+          : []),
         "────────────────────────────────────────────────────",
         "",
       ].join("\n"),
@@ -70,6 +101,19 @@ class ResendMailer implements Mailer {
       subject: email.subject,
       html: email.html,
       text: email.text,
+      /* At most ONE, ever. `contentType` carries the `method=` parameter,
+         which is what separates an invitation from a file. */
+      ...(email.calendar
+        ? {
+            attachments: [
+              {
+                filename: email.calendar.filename,
+                content: Buffer.from(email.calendar.content, "utf8"),
+                contentType: email.calendar.contentType,
+              },
+            ],
+          }
+        : {}),
     });
 
     // Resend reports failures in the payload rather than by throwing, so an

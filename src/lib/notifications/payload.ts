@@ -38,6 +38,26 @@ export interface SlotLostPayload {
   rebookPath: string;
 }
 
+/**
+ * An appointment moved.
+ *
+ * The ONE fact a reschedule email needs that the appointment no longer carries:
+ * where it moved FROM. Once the row is updated, `starts_at` is the new time and
+ * the old one exists nowhere — so the message that has to print both has to
+ * have been told, at the moment the change was made, what it was replacing.
+ *
+ * `movedBy` is here rather than derived because "you moved this" and "we moved
+ * this" are different first sentences, and the row records who CANCELLED, not
+ * who rescheduled.
+ */
+export interface ReschedulePayload {
+  kind: "reschedule";
+  /** ISO instants, as the appointment read before the change. */
+  previousStartsAt: string;
+  previousEndsAt: string;
+  movedBy: "customer" | "business";
+}
+
 /** Money went back to a customer. Addressed to the OWNER, not the customer. */
 export interface RefundPayload {
   kind: "refund";
@@ -49,4 +69,7 @@ export interface RefundPayload {
   chargeId: string;
 }
 
-export type NotificationPayload = SlotLostPayload | RefundPayload;
+export type NotificationPayload =
+  | SlotLostPayload
+  | ReschedulePayload
+  | RefundPayload;

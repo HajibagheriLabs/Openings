@@ -407,8 +407,10 @@ describe("checkout.session.completed", () => {
     expect(booked?.manageTokenHash).toHaveLength(64);
 
     const queued = await rowsFor(hold.id);
+    /* Three: the customer is confirmed and reminded, and the OWNER is told. */
     expect(queued.map((row) => row.kind).sort()).toEqual([
       "confirmation",
+      "new_booking",
       "reminder",
     ]);
     /* Written, never sent. A worker delivers them. */
@@ -427,7 +429,10 @@ describe("checkout.session.completed", () => {
     );
 
     const queued = await rowsFor(hold.id);
-    expect(queued.map((row) => row.kind)).toEqual(["confirmation"]);
+    expect(queued.map((row) => row.kind).sort()).toEqual([
+      "confirmation",
+      "new_booking",
+    ]);
   });
 
   it("produces ONE confirmed appointment and ONE set of outbox rows when the same event arrives twice", async () => {
@@ -450,7 +455,7 @@ describe("checkout.session.completed", () => {
       .where(eq(appointments.status, "confirmed"));
 
     expect(confirmed).toHaveLength(1);
-    expect(await rowsFor(hold.id)).toHaveLength(2);
+    expect(await rowsFor(hold.id)).toHaveLength(3);
     expect(await db.select().from(webhookEvents)).toHaveLength(1);
   });
 
@@ -468,7 +473,7 @@ describe("checkout.session.completed", () => {
       checkoutEvent("checkout.session.completed", { appointmentId: hold.id }),
     );
 
-    expect(await rowsFor(hold.id)).toHaveLength(2);
+    expect(await rowsFor(hold.id)).toHaveLength(3);
   });
 
   it("acknowledges an event naming an appointment that does not exist", async () => {

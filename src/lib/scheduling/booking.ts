@@ -1,11 +1,6 @@
 import "server-only";
 
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 
 import { and, eq, sql } from "drizzle-orm";
 
@@ -13,12 +8,14 @@ import type { Db } from "@/db/client";
 import { EXCLUSION_VIOLATION, findPostgresError } from "@/db/errors";
 import {
   appointments,
+  businesses,
   customers,
   notifications,
   services,
   type Appointment,
 } from "@/db/schema";
 import { depositCentsFor } from "@/lib/money";
+import { deriveManageToken } from "@/lib/notifications/manage-link";
 
 import { buildBlockingRange, type BlockingRange } from "./slot";
 
@@ -350,9 +347,14 @@ async function takeHold(
 ): Promise<HeldAppointment> {
   const holdMinutes = input.holdMinutes ?? DEFAULT_HOLD_MINUTES;
 
-  const manageToken = randomBytes(32).toString("base64url");
-  const manageTokenHash = hashManageToken(manageToken);
+  /* The calendar identity comes first, because the manage token is DERIVED
+     from it — see src/lib/notifications/manage-link.ts. That is what lets the
+     outbox worker rebuild the customer's link days later without the plaintext
+     ever being stored, and what makes the token in the hold cookie and the
+     token in the confirmation email the same string. */
   const icsUid = `${randomUUID()}@${ICS_UID_DOMAIN}`;
+  const manageToken = deriveManageToken(icsUid);
+  const manageTokenHash = hashManageToken(manageToken);
 
   try {
     return await db.transaction(async (tx) => {
@@ -609,6 +611,10 @@ export async function confirmPaidHold(
         return { outcome: "slot-lost" as const, appointment: held };
       }
 
+      /* Only ever different from `held.icsUid` for a row that arrived without
+         one at all — see the note on the update below. */
+      const repairedIcsUid = held.icsUid || `${randomUUID()}@${ICS_UID_DOMAIN}`;
+
       /* STEP 1 — clear lapsed holds from OTHER bookings overlapping this one,
          so a neighbour that expired cannot make the promotion fail. */
       await clearCollidingExpiredHolds(tx, held.staffId, held.slot, held.id);
@@ -632,18 +638,16 @@ export async function confirmPaidHold(
            * calendar forever, so a hold that already has one keeps it and only
            * an appointment created without one gets a new one.
            */
-          icsUid: held.icsUid || `${randomUUID()}@${ICS_UID_DOMAIN}`,
+          icsUid: repairedIcsUid,
           /**
-           * Same for the manage token. The row already carries the SHA-256 of
-           * the one this browser holds, and the plaintext is not ours to know
-           * — it was returned once, at hold time, and never stored. A fresh
-           * token is minted when the confirmation email is composed, so it
-           * lives in the message rather than in the database. This branch only
-           * covers a row that somehow arrived without a hash at all.
+           * Same for the manage token, and for the same reason — it is DERIVED
+           * from the UID above, so repairing one without the other would leave
+           * a row whose stored hash no manage link could ever satisfy. A row
+           * that already has both keeps both; this branch only covers one that
+           * somehow arrived without them.
            */
           manageTokenHash:
-            held.manageTokenHash ||
-            hashManageToken(randomBytes(32).toString("base64url")),
+            held.manageTokenHash || hashManageToken(deriveManageToken(repairedIcsUid)),
         })
         .where(
           and(
@@ -672,13 +676,20 @@ export async function confirmPaidHold(
        * in a booking product, is the difference between a working business and
        * an angry phone call.
        */
-      const [customer] = await tx
-        .select({ email: customers.email })
+      /* BOTH ADDRESSES IN ONE ROUND TRIP. Two selects would be two more
+         network hops inside a transaction the Stripe webhook is waiting on,
+         and the second one is Stripe's timeout. */
+      const [contact] = await tx
+        .select({
+          customerEmail: customers.email,
+          businessEmail: businesses.contactEmail,
+        })
         .from(customers)
+        .innerJoin(businesses, eq(businesses.id, appointment.businessId))
         .where(eq(customers.id, appointment.customerId!))
         .limit(1);
 
-      if (customer) {
+      if (contact) {
         const reminderAt = new Date(
           appointment.startsAt.getTime() - REMINDER_LEAD_MINUTES * 60_000,
         );
@@ -688,7 +699,7 @@ export async function confirmPaidHold(
             appointmentId: appointment.id,
             kind: "confirmation",
             channel: "email",
-            toEmail: customer.email,
+            toEmail: contact.customerEmail,
             scheduledFor: now,
           },
           /* A booking made inside the lead time has no reminder to give: the
@@ -701,11 +712,22 @@ export async function confirmPaidHold(
                   appointmentId: appointment.id,
                   kind: "reminder" as const,
                   channel: "email" as const,
-                  toEmail: customer.email,
+                  toEmail: contact.customerEmail,
                   scheduledFor: reminderAt,
                 },
               ]
             : []),
+          /* And the OWNER's copy, in the same transaction as the customer's.
+             A business that only learns about a booking when somebody walks in
+             is a business that will eventually double-book its own diary by
+             hand. Different audience, different words — see the templates. */
+          {
+            appointmentId: appointment.id,
+            kind: "new_booking" as const,
+            channel: "email" as const,
+            toEmail: contact.businessEmail,
+            scheduledFor: now,
+          },
         ]);
       }
 
@@ -893,7 +915,24 @@ export interface ClaimHoldInput {
   /** Proof the hold is this browser's. Checked in constant time. */
   manageToken: string;
   businessId: string;
-  customer: { name: string; email: string; phone: string | null };
+  customer: {
+    name: string;
+    email: string;
+    phone: string | null;
+    /**
+     * The IANA zone their browser reported, or null if it would not say.
+     *
+     * Recorded so a confirmation can print a second, labelled time for
+     * somebody booking from another country. NOTHING IS SCHEDULED IN IT — see
+     * the column comment in src/db/schema.ts.
+     *
+     * OPTIONAL, because absent is a real and ordinary answer: a booking the
+     * owner types in at the counter has no browser to ask, and a browser that
+     * declines to say leaves it null too. Both mean the same thing to every
+     * template — print one time instead of two.
+     */
+    timeZone?: string | null;
+  };
   customerNote: string | null;
   /** When the cancellation policy was ticked. */
   policyAcceptedAt: Date;
@@ -918,13 +957,13 @@ export type ClaimHoldResult =
  * Put a name to a hold, and finish the booking if there is nothing to pay.
  *
  * ONE TRANSACTION, THREE WRITES. The customer is found or created, the
- * appointment is claimed, and — when nothing is owed — the outbox row for the
- * confirmation email is written. Either all three land or none do, which is
- * what stops the two failure modes that matter: a confirmed appointment nobody
- * is ever told about, and a customer row created for a booking that never
- * happened.
+ * appointment is claimed, and — when nothing is owed — the outbox rows are
+ * written: the customer'''s confirmation and reminder, and the owner'''s copy.
+ * Either all three land or none do, which is what stops the two failure modes
+ * that matter: a confirmed appointment nobody is ever told about, and a
+ * customer row created for a booking that never happened.
  *
- * The email is NOT sent here. It is a row in `notifications` that a worker
+ * The emails are NOT sent here. They are rows in `notifications` that a worker
  * picks up, so a Resend outage cannot roll back a confirmed appointment.
  */
 export async function claimHold(
@@ -934,13 +973,20 @@ export async function claimHold(
   return db.transaction(async (tx) => {
     /* The hold has to still be ours. Read first because the token comparison
        is constant-time in Node rather than a SQL equality — see
-       `manageTokenMatches`. */
+       `manageTokenMatches`.
+
+       The business's contact address is joined on here rather than fetched
+       later, because the owner's copy of the booking is written a few
+       statements below and a second SELECT would be another network round trip
+       inside a transaction the customer is watching a countdown against. */
     const [held] = await tx
       .select({
         id: appointments.id,
         manageTokenHash: appointments.manageTokenHash,
+        businessEmail: businesses.contactEmail,
       })
       .from(appointments)
+      .innerJoin(businesses, eq(businesses.id, appointments.businessId))
       .where(
         and(
           eq(appointments.id, input.appointmentId),
@@ -973,12 +1019,17 @@ export async function claimHold(
         name: input.customer.name,
         email: input.customer.email,
         phone: input.customer.phone,
+        timezone: input.customer.timeZone ?? null,
       })
       .onConflictDoUpdate({
         target: [customers.businessId, customers.email],
         set: {
           name: sql`excluded.name`,
           phone: sql`coalesce(excluded.phone, ${customers.phone})`,
+          /* Same rule as the phone, for the same reason: a booking made from a
+             browser that would not name its zone must not erase the zone a
+             previous booking did give us. */
+          timezone: sql`coalesce(excluded.timezone, ${customers.timezone})`,
         },
       })
       .returning({ id: customers.id });
@@ -1020,14 +1071,47 @@ export async function claimHold(
     if (input.confirmNow) {
       /* The outbox. Due immediately; a worker sends it. Writing it inside the
          transaction is what guarantees a confirmed appointment always has a
-         confirmation queued against it. */
-      await tx.insert(notifications).values({
-        appointmentId: appointment.id,
-        kind: "confirmation",
-        channel: "email",
-        toEmail: input.customer.email,
-        scheduledFor: new Date(),
-      });
+         confirmation queued against it.
+
+         THE SAME THREE ROWS THE PAID PATH WRITES. A booking with no deposit is
+         still a booking: the customer gets a confirmation and a reminder, and
+         the owner hears about it. See the matching block in `confirmPaidHold`
+         — the two paths differ in what confirms the appointment, never in what
+         the people involved are told. */
+      const now = new Date();
+      const reminderAt = new Date(
+        appointment.startsAt.getTime() - REMINDER_LEAD_MINUTES * 60_000,
+      );
+
+      await tx.insert(notifications).values([
+        {
+          appointmentId: appointment.id,
+          kind: "confirmation" as const,
+          channel: "email" as const,
+          toEmail: input.customer.email,
+          scheduledFor: now,
+        },
+        /* Nothing to remind anybody about when the appointment is sooner than
+           the reminder would be. */
+        ...(reminderAt.getTime() > now.getTime()
+          ? [
+              {
+                appointmentId: appointment.id,
+                kind: "reminder" as const,
+                channel: "email" as const,
+                toEmail: input.customer.email,
+                scheduledFor: reminderAt,
+              },
+            ]
+          : []),
+        {
+          appointmentId: appointment.id,
+          kind: "new_booking" as const,
+          channel: "email" as const,
+          toEmail: held.businessEmail,
+          scheduledFor: now,
+        },
+      ]);
     }
 
     return { ok: true, appointment, customerId: customer.id };

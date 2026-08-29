@@ -86,8 +86,17 @@ export const notificationKindEnum = pgEnum("notification_kind", [
    * Rare, and the one message in this table that must never be silently lost.
    */
   "slot_lost",
-  /** To the OWNER: money went back to a customer. The only kind not addressed to one. */
+  /** To the OWNER: money went back to a customer. */
   "refund",
+  /**
+   * To the OWNER: somebody just booked.
+   *
+   * Written alongside the customer's confirmation, in the same transaction, so
+   * a business always learns about a booking from the product rather than from
+   * the person turning up. Last in this list because Postgres appends enum
+   * labels and the order here has to match the migration.
+   */
+  "new_booking",
 ]);
 
 /** Only email today. The enum exists so adding `sms` is a migration, not a refactor. */
@@ -466,6 +475,20 @@ export const customers = pgTable(
     name: text("name").notNull(),
     email: text("email").notNull(),
     phone: text("phone"),
+    /**
+     * The customer's OWN IANA zone, as their browser reported it. Nullable,
+     * because it is a courtesy rather than a fact the booking depends on: a
+     * manual booking has none, and a browser that refuses to say has none
+     * either.
+     *
+     * It is used for exactly one thing — printing a second, clearly labelled
+     * time in transactional email when it differs from the business's zone.
+     * NOTHING IS EVER SCHEDULED IN IT. Every instant in this schema is stored
+     * in UTC and every expansion happens in the business's zone; this column
+     * only decides whether an email says "14:00 in Europe/Berlin — 13:00 where
+     * you are" or just the first half.
+     */
+    timezone: text("timezone"),
     /** Private to the business. Never rendered to the customer. */
     notes: text("notes"),
     createdAt: timestamp("created_at", { withTimezone: true })
