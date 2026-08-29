@@ -1,4 +1,5 @@
 export { Ribbon, type RibbonHandle, type RibbonProps } from "./ribbon";
+export { type RibbonRange } from "./range-select";
 export { RibbonLegend } from "./ribbon-legend";
 export {
   DEFAULT_PX_PER_MIN,

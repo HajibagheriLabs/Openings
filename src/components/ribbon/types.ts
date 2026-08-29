@@ -94,6 +94,22 @@ export interface RibbonSegment {
   disabled?: boolean;
 
   /**
+   * Whether this span can be pressed, overriding the default.
+   *
+   * THE DEFAULT IS "ONLY OPEN TIME", because on the customer's picker only open
+   * time is an offer and everything else is a fact. The owner's agenda is the
+   * other way round: a booked segment is the thing they came to press — it
+   * opens the detail sheet — and so is one from this morning, because "mark as
+   * a no-show" is a decision made after the appointment did not happen.
+   *
+   * Set explicitly rather than inferred from the presence of a handler, so a
+   * surface can offer some of its segments and not others; `isPast` still dims
+   * the segment to 45% either way, since a past appointment is quieter than a
+   * live one without being unreachable.
+   */
+  selectable?: boolean;
+
+  /**
    * This span JUST changed under the visitor's eyes — somebody else booked it
    * while they were looking at it.
    *

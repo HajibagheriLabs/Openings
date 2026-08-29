@@ -5,6 +5,7 @@ import { useCallback, useEffect, useImperativeHandle, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 import { NowLine } from "./now-line";
+import { RangeSelectLayer, type RibbonRange } from "./range-select";
 import { RibbonSegmentView } from "./ribbon-segment";
 import {
   DEFAULT_PX_PER_MIN,
@@ -66,6 +67,17 @@ export interface RibbonProps {
   autoScrollToNow?: boolean;
   /** Omit to render every segment inert — a read-only ribbon. */
   onSelectSegment?: (segment: RibbonSegment) => void;
+  /**
+   * Dragging an empty stretch of a column produces a range, in MINUTES SINCE
+   * LOCAL MIDNIGHT. Omit and no drag surface is mounted at all.
+   *
+   * The Ribbon converts pixels to minutes because the scale is what it is for;
+   * it does not know what a range means. The owner's calendar turns one into
+   * blocked time. See ./range-select.tsx.
+   */
+  onSelectRange?: (columnId: string, range: RibbonRange) => void;
+  /** The grid a dragged edge snaps to. The business's slot granularity. */
+  snapMinutes?: number;
   /** Override the pinned formatting locale. See time-text.tsx. */
   locale?: string;
   /** Names the strip for assistive technology, e.g. "Thursday, 20 August". */
@@ -84,6 +96,8 @@ export function Ribbon({
   pxPerMin = DEFAULT_PX_PER_MIN,
   autoScrollToNow = false,
   onSelectSegment,
+  onSelectRange,
+  snapMinutes = 15,
   locale,
   ariaLabel,
   hideColumnHeaders = false,
@@ -176,6 +190,21 @@ export function Ribbon({
                 role="group"
               >
                 <Gridlines window={window} pxPerMin={pxPerMin} />
+
+                {/* UNDER the segments on purpose — inert ones let the pointer
+                    through and interactive ones swallow it, which is how "drag
+                    on an empty region" is expressed. See ./range-select.tsx. */}
+                {onSelectRange ? (
+                  <RangeSelectLayer
+                    columnId={column.id}
+                    window={window}
+                    pxPerMin={pxPerMin}
+                    snapMinutes={snapMinutes}
+                    minMinutes={snapMinutes}
+                    onSelect={onSelectRange}
+                    label={`Drag to block out time in ${column.label}`}
+                  />
+                ) : null}
 
                 {column.segments.map((segment) => (
                   <RibbonSegmentView

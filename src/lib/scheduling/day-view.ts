@@ -3,6 +3,7 @@ import "server-only";
 import type { Db } from "@/db/client";
 
 import { getAvailability, type ShapeSpan } from "./availability";
+import { ceilHour, floorHour, localMinuteOf } from "./local-minutes";
 import { Temporal, type TimeZoneId } from "./temporal";
 
 /**
@@ -103,40 +104,12 @@ export interface DayViewRequest {
   anchorStartsAt?: string;
 }
 
-/**
- * Minutes since LOCAL MIDNIGHT on `date`, in the business's zone.
- *
- * Wall clock, not elapsed time: a shift running past midnight comes back as
- * 1500 rather than wrapping to 60, and the Ribbon's ruler is labelled from
- * exactly this number. On the one day a year a local day is 23 or 25 hours
- * long the ruler and true elapsed time drift by an hour after the transition —
- * accepted deliberately, because the transition happens at 02:00 or 03:00,
- * outside every published opening hour this product has seen, and because a
- * ruler that says 09:00 where the shop opens at 09:00 is worth more than one
- * that is arithmetically pure and reads an hour early. The times ON the
- * segments are formatted from real instants and are never affected.
+/*
+ * `localMinuteOf`, `floorHour` and `ceilHour` moved to ./local-minutes.ts when
+ * the admin agenda started drawing the same ruler. The picker and the calendar
+ * have to agree, to the minute, about where nine o'clock is; two copies of that
+ * arithmetic would eventually disagree on exactly the day it matters.
  */
-function localMinuteOf(
-  instant: string,
-  date: string,
-  timeZone: TimeZoneId,
-): number {
-  const zoned = Temporal.Instant.from(instant).toZonedDateTimeISO(timeZone);
-  const day = Temporal.PlainDate.from(date);
-
-  const dayOffset = zoned.toPlainDate().since(day, { largestUnit: "day" }).days;
-
-  return dayOffset * 1440 + zoned.hour * 60 + zoned.minute;
-}
-
-/** Round a minute down / up to the hour, for a window that starts on the clock. */
-function floorHour(minute: number) {
-  return Math.floor(minute / 60) * 60;
-}
-
-function ceilHour(minute: number) {
-  return Math.ceil(minute / 60) * 60;
-}
 
 /**
  * Choose which of the engine's start times to DRAW.

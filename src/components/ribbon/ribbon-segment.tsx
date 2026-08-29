@@ -95,11 +95,20 @@ export function RibbonSegmentView({
 
   const duration = formatDuration(segment.durationMin);
 
-  const inert =
-    segment.isPast ||
-    segment.disabled ||
-    !INTERACTIVE_STATES.has(segment.state) ||
-    !onSelect;
+  /**
+   * Pressable, or a fact.
+   *
+   * The default is the customer's rule — open time is an offer, everything
+   * else is a statement, and a lapsed slot is neither. A surface that means
+   * something different says so per segment (`selectable`), which is how the
+   * owner's agenda makes a booked segment — including this morning's — open a
+   * detail sheet. `disabled` still wins over both.
+   */
+  const offered =
+    segment.selectable ??
+    (INTERACTIVE_STATES.has(segment.state) && !segment.isPast);
+
+  const inert = !onSelect || segment.disabled || !offered;
 
   /**
    * Everything a sighted person gets from position, size, fill and pattern,
@@ -197,7 +206,16 @@ export function RibbonSegmentView({
   if (inert) {
     return (
       <div
-        className={cn(shared, "cursor-default")}
+        /**
+         * `pointer-events-none`, and it is not only tidiness.
+         *
+         * An inert segment has nothing to hear from a pointer — but it does
+         * cover the strip, and the owner's agenda drags on that strip to block
+         * out time. Letting the pointer through means a drag can begin on open
+         * time and on a closure, and cannot begin on an appointment, which is
+         * exactly the rule "drag on an empty region" describes.
+         */
+        className={cn(shared, "pointer-events-none cursor-default")}
         style={style}
         role="img"
         aria-label={description}

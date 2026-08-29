@@ -12,6 +12,7 @@ import {
   customers,
   notifications,
   services,
+  staff,
   type Appointment,
   type AppointmentStatus,
 } from "@/db/schema";
@@ -1123,6 +1124,302 @@ export async function claimHold(
 
     return { ok: true, appointment, customerId: customer.id };
   });
+}
+
+/* ===========================================================================
+   The owner books it themselves — a phone call, or somebody at the counter
+   =========================================================================== */
+
+export interface ManualAppointmentInput {
+  businessId: string;
+  staffId: string;
+  serviceId: string;
+  /** Customer-facing start. The end comes from the service. */
+  startsAt: Date | string;
+  customer: {
+    name: string;
+    email: string;
+    phone: string | null;
+  };
+  customerNote: string | null;
+  internalNote: string | null;
+  /**
+   * Queue the customer's confirmation and reminder.
+   *
+   * OPTIONAL, because the person is standing at the counter and has just been
+   * told. It defaults to on in the form — an email with a manage link is how
+   * they cancel without ringing back — but an owner writing down a regular's
+   * standing Tuesday does not need to email them about it, and forcing one
+   * would train them to enter a fake address.
+   */
+  notifyCustomer: boolean;
+  /** One clock for the whole transaction. */
+  now?: Date;
+}
+
+export type ManualAppointmentResult =
+  | { ok: true; appointment: Appointment; customerId: string }
+  /**
+   * THE ONE REFUSAL AN OVERRIDE CANNOT LIFT. See the note below.
+   */
+  | { ok: false; reason: "slot-taken" }
+  | { ok: false; reason: "service-missing" }
+  | { ok: false; reason: "staff-missing" };
+
+/**
+ * Write an appointment directly, with no hold and no payment.
+ *
+ * ═══ WHAT AN OVERRIDE MAY AND MAY NOT DO ═══
+ *
+ * This function performs NO POLICY CHECKS AT ALL — no lead time, no opening
+ * hours, no closures, no maximum advance. That is deliberate and it is the
+ * whole shape of manual booking: those rules exist to stop a stranger booking
+ * something the business cannot honour, and the business deciding to work late
+ * on Tuesday is not that. The caller decides whether to check them (see
+ * `createManualBooking` in src/server/actions/agenda.ts, which checks by
+ * default and skips only when the owner has ticked the override).
+ *
+ * WHAT IT CANNOT SKIP, AND NEITHER CAN ANY CALLER, is the overlap. The same
+ * `appointments_no_overlap` exclusion constraint arbitrates this INSERT as
+ * arbitrates a customer's, and there is no flag anywhere in this file that
+ * turns it off. Two appointments in one chair is not a policy an owner is
+ * entitled to override — it is a physical impossibility, and the difference
+ * between "we are open when we say we are" and "one person can be in two places
+ * at once" is exactly the line manual booking is allowed to cross and not
+ * allowed to cross.
+ *
+ * ONE TRANSACTION, THREE WRITES, as everywhere else in this module: the
+ * customer is found or created, the appointment is inserted, and the outbox
+ * rows are written. Nothing is emailed here; a worker delivers them.
+ */
+export async function createManualAppointment(
+  db: Db,
+  input: ManualAppointmentInput,
+): Promise<ManualAppointmentResult> {
+  const now = input.now ?? new Date();
+
+  /* Same derivation as a public booking: the manage token comes FROM the
+     calendar UID, so a manually booked customer gets a link that works exactly
+     like everybody else's and the plaintext is never stored. */
+  const icsUid = `${randomUUID()}@${ICS_UID_DOMAIN}`;
+  const manageToken = deriveManageToken(icsUid);
+
+  try {
+    return await db.transaction(async (tx) => {
+      const [service] = await tx
+        .select()
+        .from(services)
+        .where(
+          and(
+            eq(services.id, input.serviceId),
+            eq(services.businessId, input.businessId),
+          ),
+        )
+        .limit(1);
+
+      if (!service) {
+        return { ok: false as const, reason: "service-missing" as const };
+      }
+
+      /* The staff member is checked against the BUSINESS, not merely against
+         existence: an id from another tenant must not become a column on
+         somebody else's calendar. */
+      const [member] = await tx
+        .select({ id: staff.id })
+        .from(staff)
+        .where(
+          and(eq(staff.id, input.staffId), eq(staff.businessId, input.businessId)),
+        )
+        .limit(1);
+
+      if (!member) {
+        return { ok: false as const, reason: "staff-missing" as const };
+      }
+
+      const range = buildBlockingRange(input.startsAt, service);
+
+      /* Mandatory, exactly as on every other write in this module: an expired
+         hold still occupies its slot until a statement moves it, because the
+         constraint predicate cannot reference now(). */
+      await clearCollidingExpiredHolds(tx, input.staffId, range.slot);
+
+      /* Find or create, leaning on the (business_id, email) unique index rather
+         than on a SELECT then an INSERT — the same race as checking a slot
+         before booking it, and it loses the same way. */
+      const [customer] = await tx
+        .insert(customers)
+        .values({
+          businessId: input.businessId,
+          name: input.customer.name,
+          email: input.customer.email,
+          phone: input.customer.phone,
+        })
+        .onConflictDoUpdate({
+          target: [customers.businessId, customers.email],
+          set: {
+            name: sql`excluded.name`,
+            phone: sql`coalesce(excluded.phone, ${customers.phone})`,
+          },
+        })
+        .returning({ id: customers.id });
+
+      const [appointment] = await tx
+        .insert(appointments)
+        .values({
+          businessId: input.businessId,
+          staffId: input.staffId,
+          serviceId: input.serviceId,
+          customerId: customer.id,
+          slot: range.slot,
+          startsAt: range.startsAt,
+          endsAt: range.endsAt,
+          /* Confirmed outright. There is nothing to hold a slot FOR — no form
+             to fill in and no card to find — and a `held` row would expire
+             under an appointment that is already agreed. */
+          status: "confirmed",
+          holdExpiresAt: null,
+          priceCents: service.priceCents,
+          /**
+           * ZERO, AND NOT `depositCentsFor(service)`.
+           *
+           * `deposit_cents` is money this product took. Nothing was charged
+           * here — no Checkout Session, no PaymentIntent — so writing the
+           * policy's number would put a deposit on the books that nobody paid,
+           * and a later cancellation would try to refund it. What the customer
+           * owes is `price_cents`, in person, which is what the detail sheet
+           * says.
+           */
+          depositCents: 0,
+          icsUid,
+          icsSequence: 0,
+          manageTokenHash: hashManageToken(manageToken),
+          customerNote: input.customerNote,
+          internalNote: input.internalNote,
+          /* Nobody ticked a policy box. The person who agreed to the
+             cancellation window in this case was standing at the counter. */
+          policyAcceptedAt: null,
+        })
+        .returning();
+
+      if (input.notifyCustomer) {
+        const [business] = await tx
+          .select({ reminderLeadMin: businesses.reminderLeadMin })
+          .from(businesses)
+          .where(eq(businesses.id, input.businessId))
+          .limit(1);
+
+        const reminderAt = reminderInstantFor({
+          startsAt: appointment.startsAt,
+          reminderLeadMin: business?.reminderLeadMin ?? 24 * 60,
+          now,
+        });
+
+        /* No `new_booking` row. The owner is the one typing this in; emailing
+           them about it would be the product telling them what they just did. */
+        await tx.insert(notifications).values([
+          {
+            appointmentId: appointment.id,
+            kind: "confirmation" as const,
+            channel: "email" as const,
+            toEmail: input.customer.email,
+            scheduledFor: now,
+          },
+          ...(reminderAt
+            ? [
+                {
+                  appointmentId: appointment.id,
+                  kind: "reminder" as const,
+                  channel: "email" as const,
+                  toEmail: input.customer.email,
+                  scheduledFor: reminderAt,
+                },
+              ]
+            : []),
+        ]);
+      }
+
+      return { ok: true as const, appointment, customerId: customer.id };
+    });
+  } catch (error) {
+    if (isExclusionViolation(error)) {
+      return { ok: false, reason: "slot-taken" };
+    }
+
+    throw error;
+  }
+}
+
+/* ===========================================================================
+   The owner edits an appointment in place
+   =========================================================================== */
+
+/**
+ * Move an appointment to a terminal state the owner alone decides.
+ *
+ * `completed` and `no_show` are the two facts only the business can report, and
+ * they are recorded rather than derived: an appointment whose end time has
+ * passed is not automatically completed, because the customer may not have
+ * come. Both statuses stop blocking the slot, which is correct — the time is
+ * spent either way and nothing else can be booked into the past.
+ *
+ * Guarded in SQL on the statuses it is legal to move FROM, so two clicks
+ * produce one change and the second one gets `unchanged` rather than
+ * overwriting a cancellation with a no-show.
+ */
+export async function settleAppointment(
+  db: Db,
+  input: {
+    appointmentId: string;
+    businessId: string;
+    outcome: "completed" | "no_show";
+  },
+): Promise<{ ok: true; appointment: Appointment } | { ok: false; reason: "not-settleable" }> {
+  const [settled] = await db
+    .update(appointments)
+    .set({ status: input.outcome, holdExpiresAt: null })
+    .where(
+      and(
+        eq(appointments.id, input.appointmentId),
+        eq(appointments.businessId, input.businessId),
+        /* Only a live booking can be completed or missed. A cancelled one was
+           not attended and was not a no-show; it did not happen. */
+        eq(appointments.status, "confirmed"),
+      ),
+    )
+    .returning();
+
+  return settled
+    ? { ok: true, appointment: settled }
+    : { ok: false, reason: "not-settleable" };
+}
+
+/**
+ * The business's private note on an appointment.
+ *
+ * NEVER SHOWN TO THE CUSTOMER — not in the confirmation, not on the manage
+ * page, not in the .ics. That is what makes it useful ("pay by card only",
+ * "always fifteen minutes late") and it is why it is a different column from
+ * `customer_note`, which the customer wrote and can read.
+ *
+ * Editable in any status, cancelled included: "cancelled twice in a row" is
+ * exactly the kind of thing worth writing down.
+ */
+export async function setInternalNote(
+  db: Db,
+  input: { appointmentId: string; businessId: string; note: string | null },
+): Promise<boolean> {
+  const updated = await db
+    .update(appointments)
+    .set({ internalNote: input.note })
+    .where(
+      and(
+        eq(appointments.id, input.appointmentId),
+        eq(appointments.businessId, input.businessId),
+      ),
+    )
+    .returning({ id: appointments.id });
+
+  return updated.length > 0;
 }
 
 /**
