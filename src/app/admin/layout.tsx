@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AdminShell } from "@/components/admin/admin-shell";
+import { DemoBanner } from "@/components/admin/demo-banner";
 import { Toaster } from "@/components/toaster";
 import { getOwnedBusiness, requireUser } from "@/lib/auth-server";
 import { signOutAction } from "@/server/actions/session";
@@ -42,6 +43,10 @@ export default async function AdminLayout({
       nowInstant={new Date().toISOString()}
       user={{ name: user.name, email: user.email }}
       signOutAction={signOutAction}
+      /* Read off the business row rather than off configuration, so a real
+         business can never be labelled a demo by a stray environment
+         variable — and the demo can never quietly stop saying so. */
+      banner={business.isDemo ? <DemoBanner /> : null}
     >
       {children}
 

@@ -9,6 +9,7 @@ import { db } from "@/db";
 import { countScheduled, countUnscheduled } from "@/lib/notifications/delivery";
 import { getScheduler } from "@/lib/notifications/scheduler";
 import { requireOwnerBusiness } from "@/server/actions/context";
+import { DEMO_FIXED_FIELDS_REASON } from "@/server/demo/guard";
 
 export const metadata: Metadata = {
   title: "Settings",
@@ -40,6 +41,29 @@ export default async function SettingsPage() {
       />
 
       <div className="flex flex-col gap-6">
+        {business.isDemo ? (
+          /**
+           * The demo's fixed settings, said out loud on the screen they would
+           * be changed from.
+           *
+           * There is no business-details form yet, so nothing here could
+           * change the timezone anyway — the refusal lives in a database
+           * trigger (migration 0013), which covers direct SQL and any action
+           * written later. What this is for is the visitor who wonders why:
+           * a rule enforced silently reads as a bug the first time somebody
+           * bumps into it.
+           */
+          <div className="flex flex-col gap-2 rounded-card border border-line bg-surface px-5 py-4">
+            <p className="type-label">Fixed in the demo</p>
+            <p className="type-body text-ink-muted">
+              {DEMO_FIXED_FIELDS_REASON}
+            </p>
+            <p className="type-body-sm text-ink-faint">
+              Currently {business.timezone} · {business.currency}.
+            </p>
+          </div>
+        ) : null}
+
         <ReminderSettings reminderLeadMin={business.reminderLeadMin} />
 
         <DeliveryStatus

@@ -12,6 +12,8 @@ import {
   type StaffFormInput,
 } from "@/lib/validation/catalog";
 
+import { refuseDemoDelete } from "@/server/demo/guard";
+
 import { requireOwnerBusiness } from "./context";
 import type { BlockedResult, FieldErrors, MutationResult } from "./result";
 
@@ -219,6 +221,14 @@ export async function setStaffActive(
  */
 export async function deleteStaff(staffId: string): Promise<BlockedResult> {
   const business = await requireOwnerBusiness();
+
+  /* The demo's cast is the demonstration. A trigger refuses this too — see
+     migration 0013 — and this only buys a sentence instead of a 500. */
+  const demo = refuseDemoDelete(business, "staff");
+
+  if (demo) {
+    return demo;
+  }
 
   const [existing] = await db
     .select({ id: staff.id, name: staff.name })

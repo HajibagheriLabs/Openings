@@ -39,6 +39,7 @@ export function AdminShell({
   nowInstant,
   user,
   signOutAction,
+  banner,
   children,
 }: {
   businessName: string;
@@ -47,6 +48,11 @@ export function AdminShell({
   nowInstant: string;
   user: { name: string; email: string };
   signOutAction: () => Promise<void>;
+  /**
+   * A permanent strip under the top bar. Server-rendered, so it costs the
+   * browser bundle nothing — today it is the demo notice and nothing else.
+   */
+  banner?: ReactNode;
   children: ReactNode;
 }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -134,6 +140,11 @@ export function AdminShell({
               signOutAction={signOutAction}
             />
           </div>
+
+          {/* Inside the sticky header, so it does not scroll away. A notice
+              that says "none of this is real" is worth nothing the moment it
+              is off screen. */}
+          {banner}
         </header>
 
         <main className="min-w-0 flex-1 px-4 py-6 sm:px-6 sm:py-8">

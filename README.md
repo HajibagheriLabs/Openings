@@ -53,6 +53,44 @@ npm run dev
 | `npm run lint`      | ESLint                                        |
 | `npm run test`      | Vitest (integration files need `TEST_DATABASE_URL`) |
 | `npm run email`     | React Email preview on http://localhost:3001  |
+| `npm run db:migrate` | Apply migrations                             |
+| `npm run db:seed`   | Build the demo workspace                      |
+
+## The demo workspace
+
+```bash
+npm run db:migrate
+npm run db:seed
+```
+
+The seed builds **two businesses in two timezones** — a salon in `Europe/Lisbon` and a clinic in
+`America/Chicago`. Two zones is the point: they are six hours apart, they change their clocks on
+different weekends, and both publish their opening hours as local wall-clock times. If any of the
+scheduling maths happened in the server's timezone, or on raw milliseconds, one of the two calendars
+would be visibly wrong.
+
+Each gets three to five services with varied durations and buffers, two or three staff on staggered
+rotas with different service assignments, realistic time off, and a fortnight of appointments either
+side of today at a density that reads as an ordinary working week. Three days out, the salon has a
+deliberately awkward day: a lunch break, a blocked afternoon, and a 150-minute service whose buffers
+push it to 195 — so it fits in the morning and nowhere else, while shorter services still fit around
+the break.
+
+It is idempotent and deterministic. Every choice comes from a fixed seed rather than `Math.random`,
+and the previous demo is torn down before the next is built, so two runs produce the same businesses
+re-anchored to the new today. **Re-run it to move the fortnight forward.**
+
+`/demo` signs a visitor in as the salon owner and lands them on today's agenda, with a permanent
+banner saying the bookings are not real. The public booking pages stay open to everyone, and anyone
+can complete a booking with Stripe's test card — which is printed on the landing page next to the
+button that needs it.
+
+Demo restrictions are enforced by a database trigger (migration `0013`) as well as by the Server
+Actions, so no action written later can forget them: the timezone, slug and currency are fixed, and
+the business, its services, its staff and its customers cannot be deleted. Everything else works
+normally — booking, cancelling, blocking time out, editing hours. Bookings visitors leave behind are
+cleared by the daily job after 24 hours; the seeded fortnight is recognised by its calendar UID
+domain and left alone.
 
 ## Email and calendar invites
 

@@ -1,154 +1,220 @@
-import { APP_NAME } from "@/lib/brand";
+import { ArrowRight, CreditCard, Globe2 } from "lucide-react";
+import type { Metadata } from "next";
+import Link from "next/link";
+
+import { PillButton } from "@/components/pill-button";
+import { RibbonLegend } from "@/components/ribbon";
+import { ThemeToggle } from "@/components/theme-toggle";
+import { APP_DESCRIPTION, APP_NAME } from "@/lib/brand";
+import { loadDemoBusinesses } from "@/server/queries/booking-page";
+
+export const metadata: Metadata = {
+  title: `${APP_NAME} — booking for local service businesses`,
+  description: APP_DESCRIPTION,
+};
 
 /**
- * Placeholder home page.
+ * The front door.
  *
- * Its only job right now is to prove the design system is wired up: both type
- * faces, both shadow tokens, and slot states encoded by fill, pattern and
- * value rather than by hue. The real Ribbon component replaces this and is
- * shared by the customer day picker and the admin agenda.
+ * ═══ IT ASSUMES THE READER HAS TWO MINUTES AND NO PATIENCE ═══
  *
- * The times below are literal strings because nothing here is real data yet.
- * In the product, the server sends ISO instants plus the business timezone and
- * the client formats them with Intl.DateTimeFormat — it never does date
- * arithmetic.
+ * Somebody arriving here is deciding whether to click anything at all. So the
+ * page does three things and stops: it says what this is, it hands over the two
+ * ways in — the owner's side and a customer's side — and it puts the Stripe
+ * test card ON THE SCREEN next to the booking link.
+ *
+ * That last one is not a detail. The most convincing thing this product can do
+ * is take a real deposit through a real Checkout Session and confirm the
+ * booking from the verified webhook — and a visitor who has to go and look up
+ * a test card number will simply not do it. The number is four words away from
+ * the button that needs it.
+ *
+ * ═══ THE TWO BUSINESSES ARE READ FROM THE DATABASE ═══
+ *
+ * Not hardcoded. A clone that has not run `npm run db:seed` has no demo, and
+ * this page says so plainly instead of linking to a 404 — which is the more
+ * common state for anybody who has just cloned it.
  */
 
-/** Fixed scale. A 90-minute service occupies three times a 30-minute one. */
-const PX_PER_MIN = 1.4;
+/**
+ * Stripe's universally-accepted test card. Published deliberately: it is
+ * documented, it is not a secret, and it only works against test-mode keys.
+ */
+const TEST_CARD = {
+  number: "4242 4242 4242 4242",
+  extra: "Any future expiry date, any 3-digit CVC, any postcode.",
+} as const;
 
-const DAY_START_MIN = 9 * 60;
-const DAY_END_MIN = 14 * 60;
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ demo?: string }>;
+}) {
+  const [demos, { demo }] = await Promise.all([
+    loadDemoBusinesses(),
+    searchParams,
+  ]);
 
-const minutesFromStart = (min: number) => min - DAY_START_MIN;
-const top = (min: number) => `${minutesFromStart(min) * PX_PER_MIN}px`;
-const height = (mins: number) => `${mins * PX_PER_MIN}px`;
+  const seeded = demos.length > 0;
 
-const HOURS = [9, 10, 11, 12, 13, 14];
-
-export default function Home() {
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-[560px] flex-col gap-8 px-5 py-12">
-      <header className="flex flex-col gap-3">
-        <p className="type-label">{APP_NAME}</p>
-        <h1 className="type-display text-ink">Pick a time.</h1>
-        <p className="type-body text-ink-muted">
-          Time is drawn to scale. A longer service takes up more of the day, and
-          a booked appointment is carved out of it rather than stacked on top.
-        </p>
-      </header>
+    <div className="flex min-h-dvh flex-col">
+      <div className="mx-auto flex w-full max-w-[720px] justify-end px-5 pt-4">
+        <ThemeToggle />
+      </div>
 
-      <section aria-labelledby="ribbon-heading" className="flex flex-col gap-4">
-        <h2 id="ribbon-heading" className="type-section text-ink">
-          Thursday, 20 August
-        </h2>
+      <main className="mx-auto flex w-full max-w-[720px] flex-1 flex-col gap-12 px-5 pt-2 pb-16">
+        <header className="flex flex-col gap-4">
+          <p className="type-label">{APP_NAME}</p>
+          <h1 className="type-display text-ink">
+            Booking that gets the time right.
+          </h1>
+          <p className="type-body max-w-[52ch] text-ink-muted">
+            A scheduling engine for clinics, salons and consultants. Slots are
+            held in the database while a customer checks out, double-booking is
+            refused by Postgres rather than by hopeful application code, and
+            every time on every screen is resolved in the business&rsquo;s own
+            timezone.
+          </p>
+        </header>
 
-        <div className="flex gap-3">
-          {/* Time axis. Every time in the product is set in Epilogue, tabular. */}
-          <div
-            aria-hidden="true"
-            className="relative w-11 shrink-0"
-            style={{ height: height(DAY_END_MIN - DAY_START_MIN) }}
+        {demo === "unavailable" ? (
+          /* Sent here by /demo when there is nothing to sign into. An honest
+             sentence and the command that fixes it — this is a state a
+             reviewer who just cloned the repository will actually hit. */
+          <p
+            role="status"
+            className="type-body-sm rounded-card border border-line bg-surface-sunk px-4 py-3 text-ink-muted"
           >
-            {HOURS.map((hour) => (
-              <span
-                key={hour}
-                className="type-time absolute right-0 -translate-y-1/2 text-ink-faint"
-                style={{ top: top(hour * 60) }}
-              >
-                {String(hour).padStart(2, "0")}:00
-              </span>
-            ))}
+            The demo workspace has not been set up on this deployment. Running{" "}
+            <code className="type-time text-ink">npm run db:seed</code> creates
+            it.
+          </p>
+        ) : null}
+
+        {/* ---- The owner's side ------------------------------------------ */}
+        <section aria-labelledby="owner-heading" className="flex flex-col gap-4">
+          <h2 id="owner-heading" className="type-page-title text-ink">
+            Look around as the business
+          </h2>
+          <p className="type-body max-w-[52ch] text-ink-muted">
+            One click signs you in as the owner of a demo salon and drops you on
+            today&rsquo;s agenda: the day drawn to scale, one column per staff
+            member, live as bookings land. Nothing you do there is real.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {/* A real disabled button when there is nothing to enter, rather
+                than a link with a `disabled` attribute — an anchor has no such
+                attribute, so that would render an enabled link to a redirect. */}
+            {seeded ? (
+              <PillButton asChild>
+                <Link href="/demo">
+                  Open the demo workspace
+                  <ArrowRight aria-hidden="true" />
+                </Link>
+              </PillButton>
+            ) : (
+              <PillButton disabled>Demo not set up</PillButton>
+            )}
+
+            <Link
+              href="/sign-in"
+              className="type-body-sm text-ink-muted underline underline-offset-4 hover:text-ink"
+            >
+              or sign in to your own
+            </Link>
           </div>
+        </section>
 
-          {/* The channel. Never raised — the ribbon is material, not a card. */}
-          <div
-            className="relative flex-1 overflow-hidden rounded-card border border-line bg-surface"
-            style={{ height: height(DAY_END_MIN - DAY_START_MIN) }}
-          >
-            {/* Hour gridlines */}
-            {HOURS.slice(1, -1).map((hour) => (
-              <div
-                key={hour}
-                aria-hidden="true"
-                className="absolute inset-x-0 h-px bg-line"
-                style={{ top: top(hour * 60) }}
-              />
-            ))}
+        {/* ---- The customer's side, and the card ------------------------- */}
+        <section
+          aria-labelledby="customer-heading"
+          className="flex flex-col gap-4"
+        >
+          <h2 id="customer-heading" className="type-page-title text-ink">
+            Or book something, properly
+          </h2>
+          <p className="type-body max-w-[52ch] text-ink-muted">
+            These are ordinary public booking pages — no account, no login. Pick
+            a time and it is genuinely held for eight minutes while you check
+            out. The deposit goes through Stripe in test mode, and the booking
+            is only confirmed once the signed webhook says the money landed.
+          </p>
 
-            <ul className="contents">
-              {/* OPEN — accent wash, 1px accent border. The only place hue appears. */}
-              <li
-                className="absolute inset-x-2 flex items-center justify-between gap-2 rounded-segment border border-accent bg-accent-wash px-3"
-                style={{ top: top(9 * 60 + 30), height: height(45) }}
-              >
-                <span className="type-time text-accent">09:30</span>
-                <span className="type-body-sm text-accent">Open · 45 min</span>
-              </li>
+          {seeded ? (
+            <ul className="flex flex-col gap-3">
+              {demos.map((business) => (
+                <li key={business.slug}>
+                  <Link
+                    href={`/book/${business.slug}`}
+                    className="flex items-start gap-4 rounded-card border border-line bg-surface px-4 py-4 transition-colors hover:bg-surface-sunk"
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="type-section text-ink">
+                        {business.name}
+                      </span>
+                      {business.description ? (
+                        <span className="type-body-sm text-ink-muted">
+                          {business.description}
+                        </span>
+                      ) : null}
+                      <span className="type-body-sm flex items-center gap-2 pt-1 text-ink-faint">
+                        <Globe2 aria-hidden="true" className="size-3.5" />
+                        {business.place ? `${business.place} · ` : null}
+                        {business.timezone}
+                      </span>
+                    </span>
 
-              {/* BOOKED — sunk and inset, carved into the day. Initials, no hue. */}
-              <li
-                className="absolute inset-x-2 flex items-center justify-between gap-2 rounded-segment bg-surface-sunk px-3 shadow-inset"
-                style={{ top: top(10 * 60 + 30), height: height(60) }}
-              >
-                <span className="type-time text-ink-muted">10:30</span>
-                <span className="type-body-sm font-medium text-ink-muted">
-                  Booked · MR
-                </span>
-              </li>
-
-              {/* BLOCKED — denser hatching over the sunk surface, plus a label. */}
-              <li
-                className="hatch-dense absolute inset-x-2 flex items-center justify-between gap-2 rounded-segment bg-surface-sunk px-3"
-                style={{ top: top(12 * 60), height: height(60) }}
-              >
-                <span className="type-time text-ink-faint">12:00</span>
-                <span className="type-body-sm text-ink-faint">Blocked</span>
-              </li>
+                    <ArrowRight
+                      aria-hidden="true"
+                      className="mt-1 size-4 shrink-0 text-ink-faint"
+                    />
+                  </Link>
+                </li>
+              ))}
             </ul>
+          ) : (
+            <p className="type-body-sm rounded-card border border-dashed border-line px-4 py-3 text-ink-muted">
+              No demo businesses yet. Run{" "}
+              <code className="type-time text-ink">npm run db:seed</code> to
+              create two, in two different timezones.
+            </p>
+          )}
+
+          {/* THE TEST CARD, next to the thing that needs it. A recruiter will
+              not go looking for it, and the payment path is the part worth
+              seeing. */}
+          <div className="flex flex-col gap-2 rounded-card border border-accent bg-accent-wash px-4 py-4">
+            <p className="type-label flex items-center gap-2 text-accent">
+              <CreditCard aria-hidden="true" className="size-3.5" />
+              Test card
+            </p>
+            <p className="type-time-lg text-ink">{TEST_CARD.number}</p>
+            <p className="type-body-sm text-ink-muted">{TEST_CARD.extra}</p>
+            <p className="type-body-sm text-ink-faint">
+              Stripe test mode. No real money can move through this, and the
+              card number is Stripe&rsquo;s own published test value.
+            </p>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Legend. Every state carries a text label — colour is never the only signal. */}
-      <section aria-labelledby="legend-heading" className="flex flex-col gap-3">
-        <h2 id="legend-heading" className="type-label">
-          How to read this
-        </h2>
-        <ul className="flex flex-col gap-2">
-          <li className="type-body-sm flex items-center gap-3 text-ink-muted">
-            <span
-              aria-hidden="true"
-              className="size-5 shrink-0 rounded-segment border border-accent bg-accent-wash"
-            />
-            Open — you can book this
-          </li>
-          <li className="type-body-sm flex items-center gap-3 text-ink-muted">
-            <span
-              aria-hidden="true"
-              className="size-5 shrink-0 rounded-segment bg-surface-sunk shadow-inset"
-            />
-            Booked — taken, shown with the initials
-          </li>
-          <li className="type-body-sm flex items-center gap-3 text-ink-muted">
-            <span
-              aria-hidden="true"
-              className="hatch-dense size-5 shrink-0 rounded-segment bg-surface-sunk"
-            />
-            Blocked — the business is closed or away
-          </li>
-        </ul>
-      </section>
+        {/* ---- What the drawing means ------------------------------------ */}
+        <section aria-labelledby="ribbon-heading" className="flex flex-col gap-4">
+          <h2 id="ribbon-heading" className="type-page-title text-ink">
+            Time is drawn to scale
+          </h2>
+          <p className="type-body max-w-[52ch] text-ink-muted">
+            A 90-minute appointment takes up three times the space of a
+            30-minute one, on the customer&rsquo;s picker and on the
+            owner&rsquo;s agenda, because it is the same component at the same
+            scale. Booked time is carved out of the day rather than stacked on
+            top of it, and no state is signalled by colour alone.
+          </p>
 
-      {/* The only raised surface on the page: --shadow-float. */}
-      <aside className="rounded-card border border-line bg-surface p-5 shadow-float">
-        <p className="type-label">Your slot</p>
-        <p className="type-time-lg mt-2 text-ink">09:30 – 10:15</p>
-        <p className="type-body-sm mt-1 text-ink-muted">
-          Nothing is held yet. Choosing a time reserves it for 8 minutes while
-          you check out.
-        </p>
-      </aside>
-    </main>
+          <RibbonLegend className="max-w-[46ch]" />
+        </section>
+      </main>
+    </div>
   );
 }

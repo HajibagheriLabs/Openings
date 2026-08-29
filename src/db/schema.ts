@@ -351,6 +351,29 @@ export const businesses = pgTable("businesses", {
     .notNull()
     .default(false),
 
+  /**
+   * This business exists to be looked at.
+   *
+   * Set only by the seed script. It marks the two sample businesses a visitor
+   * can wander into from the landing page, and it turns on three things:
+   *
+   *   1. A banner across the owner area saying the bookings are not real.
+   *   2. A set of REFUSALS — the timezone, slug and currency cannot be
+   *      changed, and the business, its services, its staff and its customers
+   *      cannot be deleted. Enforced by a database trigger as well as by the
+   *      actions, because a demo that a passer-by can hollow out is a demo
+   *      that is broken by the second visitor. See migration 0013.
+   *   3. A nightly tidy-up that removes bookings visitors made more than a day
+   *      ago, so the calendar stays the shape the seed drew.
+   *
+   * A COLUMN RATHER THAN AN ENVIRONMENT VARIABLE. "Is this the demo?" is asked
+   * inside SQL, inside a trigger, and on every owner page load; matching an
+   * email address against configuration in all three places would mean three
+   * chances to disagree, and a production business would be one typo away from
+   * being read-only.
+   */
+  isDemo: boolean("is_demo").notNull().default(false),
+
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

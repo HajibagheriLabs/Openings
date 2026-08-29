@@ -13,6 +13,8 @@ import {
   type ServiceFormInput,
 } from "@/lib/validation/catalog";
 
+import { refuseDemoDelete } from "@/server/demo/guard";
+
 import { requireOwnerBusiness } from "./context";
 import type { BlockedResult, FieldErrors, MutationResult } from "./result";
 
@@ -246,6 +248,14 @@ export async function setServiceActive(
  */
 export async function deleteService(serviceId: string): Promise<BlockedResult> {
   const business = await requireOwnerBusiness();
+
+  /* The demo's menu is the demonstration. A trigger refuses this too — see
+     migration 0013 — and this only buys a sentence instead of a 500. */
+  const demo = refuseDemoDelete(business, "services");
+
+  if (demo) {
+    return demo;
+  }
 
   const [existing] = await db
     .select({ id: services.id, name: services.name })

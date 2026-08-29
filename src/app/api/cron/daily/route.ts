@@ -5,6 +5,7 @@ import { countScheduled, countUnscheduled } from "@/lib/notifications/delivery";
 import { drainNotifications } from "@/lib/notifications/worker";
 import { reclaimExpiredHolds } from "@/lib/scheduling/booking";
 import { forgetIdleRateLimits } from "@/server/booking/rate-limit";
+import { tidyDemoBookings } from "@/server/demo/tidy";
 import { forgetOldWebhookEvents } from "@/server/payments/webhook";
 import { authorizeCron, isSignedByScheduler } from "@/server/scheduled/authorize";
 
@@ -125,6 +126,10 @@ async function run(request: Request) {
        subject, so it only stops the table remembering every address that ever
        visited a manage link. */
     const limits = await forgetIdleRateLimits(db);
+    /* And the demo workspace, if this deployment has one. Bookings visitors
+       left behind more than a day ago go; the seeded fortnight stays, or the
+       first sweep would empty the calendar it exists to keep presentable. */
+    const demoBookings = await tidyDemoBookings(db);
 
     /* What the sweep is still carrying versus what has a delivery booked. The
        first number growing is the signal that scheduling is broken. */
@@ -146,10 +151,12 @@ async function run(request: Request) {
       webhookEventsForgotten: events,
       /** Idle rate-limit counters. */
       rateLimitsForgotten: limits,
+      /** Test bookings cleared out of the demo workspace. Always 0 without one. */
+      demoBookingsCleared: demoBookings,
       pending: { scheduled, awaitingCatchUp: unscheduled },
     };
 
-    if (outbox.claimed > 0 || holds > 0) {
+    if (outbox.claimed > 0 || holds > 0 || demoBookings > 0) {
       console.info(`[cron] daily sweep: ${JSON.stringify(summary)}`);
     }
 

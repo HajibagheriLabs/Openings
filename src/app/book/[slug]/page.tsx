@@ -5,6 +5,7 @@ import {
   BookingChoices,
   type BookingChoice,
 } from "@/components/booking/booking-choices";
+import { BusinessFrontPage } from "@/components/booking/front-page";
 import { BusinessHeader } from "@/components/booking/business-header";
 import { ConfirmedStep } from "@/components/booking/confirmed-step";
 import { ConfirmingStep } from "@/components/booking/confirming-step";
@@ -12,7 +13,6 @@ import { DateStep } from "@/components/booking/date-step";
 import { DetailsStep } from "@/components/booking/details-step";
 import { HoldGone } from "@/components/booking/hold-gone";
 import { NoServices } from "@/components/booking/no-services";
-import { ServiceStep } from "@/components/booking/service-step";
 import { StaffStep } from "@/components/booking/staff-step";
 import { TimeStep } from "@/components/booking/time-step";
 import { formatInstantDate } from "@/components/time-text";
@@ -36,7 +36,10 @@ import {
   readHoldFor,
   resolvePicker,
 } from "@/server/booking/picker";
-import { loadPublicBusiness } from "@/server/queries/booking-page";
+import {
+  loadPublicBusiness,
+  loadPublicOpeningHours,
+} from "@/server/queries/booking-page";
 import { loadBookableServices } from "@/server/queries/catalog";
 
 /**
@@ -139,6 +142,49 @@ export default async function BookingPage({
   const query = parseBookingQuery(await searchParams);
 
   /* ---------------------------------------------------------------------
+     Step 0 — the business's own page.
+
+     THE BARE URL IS NOT THE FIRST SCREEN OF A FORM. A booking link is what a
+     salon puts on a shop sign and in an Instagram bio, and somebody arriving
+     at it has usually not decided to book yet: they are checking whether this
+     is the right place, where it is, and whether it opens on Saturday. So a
+     URL with nothing chosen renders a page about the business, and the funnel
+     begins the moment a service is picked.
+
+     `hasChoice` rather than `query.service === null`, because every other
+     parameter is also a visitor part-way through something — a shared link to
+     a Tuesday, a return from Stripe, a month being browsed — and none of them
+     should be pushed back to the front page.
+  --------------------------------------------------------------------- */
+
+  const hasChoice =
+    query.service !== null ||
+    query.staff !== null ||
+    query.date !== null ||
+    query.month !== null ||
+    query.step !== null ||
+    query.session !== null ||
+    query.notice !== null;
+
+  if (!hasChoice) {
+    const hours = await loadPublicOpeningHours(
+      business.id,
+      business.timezone,
+      now,
+    );
+
+    return (
+      <BusinessFrontPage
+        slug={slug}
+        business={business}
+        services={services}
+        hours={hours}
+        instant={nowInstant}
+      />
+    );
+  }
+
+  /* ---------------------------------------------------------------------
      Booked — checked first, because it is the one screen that does not
      depend on anything in the URL beyond the slug. The appointment comes
      from the cookie the hold left behind.
@@ -189,36 +235,17 @@ export default async function BookingPage({
     candidate.staff.filter((member) => member.isActive);
 
   if (!service) {
-    /* The flow's length is not yet known — it depends on how many people
-       perform the service that has not been chosen. The widest team is the
-       longest the flow could be, and a progress line that may jump forward
-       later is better than one that grows. */
-    const widestTeam = Math.max(
-      ...services.map((candidate) => activeStaffOf(candidate).length),
-    );
-
-    const flow = buildBookingFlow({
-      serviceCount: services.length,
-      staffCount: widestTeam,
-      /* Before a service is chosen, assume the longest flow: if ANY bookable
-         service asks for a deposit the line may have a payment step, and a
-         progress line that shrinks is better than one that grows. */
-      hasDeposit: services.some(
-        (candidate) => depositCentsFor(candidate) > 0,
-      ),
-      chosen: { service: false, staff: false, date: false, time: false },
-    });
-
-    return (
-      <ServiceStep
-        slug={slug}
-        currency={business.currency}
-        services={services}
-        step={flow.step}
-        totalSteps={flow.total}
-        header={header}
-      />
-    );
+    /**
+     * BACK TO THE FRONT PAGE, which is where services are chosen now.
+     *
+     * This is reached by a URL that names something else — a stale link to a
+     * month, a hand-edited staff parameter — without naming a service that
+     * still exists. There is exactly one screen in this product that lists
+     * what a business does, and it is the business's own page; rendering a
+     * second, thinner copy of it here would be two places to keep in step for
+     * the sake of an address nobody types on purpose.
+     */
+    redirect(bookingUrl(slug));
   }
 
   /* The deposit this service asks for, worked out once. It decides whether the
