@@ -3,7 +3,12 @@ import "server-only";
 import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 
 import type { Db } from "@/db/client";
-import { notifications, type Notification } from "@/db/schema";
+import {
+  notifications,
+  type AppointmentStatus,
+  type Notification,
+  type NotificationKind,
+} from "@/db/schema";
 
 import { composeNotification, describeNotification } from "./compose";
 import { loadNotificationSubject } from "./context";
@@ -66,6 +71,47 @@ export const BACKOFF_CAP_SECONDS = 2 * 60 * 60;
 export const DEFAULT_BATCH = 25;
 
 /**
+ * How early a TARGETED delivery may claim its row.
+ *
+ * A scheduled message is published for an exact instant, and the delivery
+ * service is entitled to arrive a moment before it — clocks differ, and
+ * `notBefore` is rounded down to whole seconds when it is published. Without
+ * some tolerance such a message would find its row not yet due, do nothing,
+ * and leave the reminder to the daily catch-up: a whole day late for the sake
+ * of half a second.
+ *
+ * SAFELY BELOW THE LEASE, and that is the constraint that fixes the number. A
+ * claim pushes `scheduled_for` to now + CLAIM_LEASE_SECONDS, so any tolerance
+ * smaller than the lease cannot see a row another worker is already sending.
+ * One minute against a five-minute lease has four minutes of headroom.
+ */
+export const CLAIM_TOLERANCE_SECONDS = 60;
+
+/**
+ * Kinds that are only true while the appointment is still happening.
+ *
+ * THE SECOND LINE OF DEFENCE behind calling a scheduled message off. Cancelling
+ * an appointment withdraws its queued messages and cancels their scheduled
+ * deliveries — but a delivery service can fail to cancel, or a message can
+ * already be in flight, and "your appointment is tomorrow" for an appointment
+ * that was cancelled last week is the single most embarrassing email this
+ * product could send. So the status is re-read at SEND time and these kinds
+ * are refused if it has moved on.
+ *
+ * The other kinds are ABOUT the appointment not happening — a cancellation, an
+ * apology, a refund notice — so they must send precisely when it is not live.
+ */
+const REQUIRES_LIVE_APPOINTMENT: NotificationKind[] = [
+  "confirmation",
+  "reminder",
+  "reschedule",
+  "new_booking",
+];
+
+/** The statuses those kinds consider live. */
+const LIVE_STATUSES: AppointmentStatus[] = ["confirmed", "completed"];
+
+/**
  * How long to wait after `attempts` failures.
  *
  * Exponential, and DELIBERATELY WITHOUT JITTER. Jitter matters when a crowd of
@@ -96,13 +142,21 @@ export type DeliveryOutcome =
       error: string;
     }
   /** Given up on: out of attempts, or unsendable in a way retrying cannot fix. */
-  | { status: "failed"; id: string; kind: string; attempts: number; error: string };
+  | { status: "failed"; id: string; kind: string; attempts: number; error: string }
+  /**
+   * Withdrawn on arrival: the appointment it describes is no longer happening.
+   * Not a failure — the product changed its mind, and this is the message
+   * finding out.
+   */
+  | { status: "cancelled"; id: string; kind: string; reason: string };
 
 export interface DrainResult {
   claimed: number;
   sent: number;
   retrying: number;
   failed: number;
+  /** Withdrawn because the appointment stopped being live. */
+  cancelled: number;
   /** Which mailer ran, so a log line can say whether anything actually left. */
   mailer: string;
   outcomes: DeliveryOutcome[];
@@ -112,11 +166,23 @@ export interface DrainResult {
    Claiming
    =========================================================================== */
 
+interface ClaimFilter {
+  limit: number;
+  now: Date | undefined;
+  /** Claim only this row. Used by a targeted, scheduled delivery. */
+  only?: string;
+  /** Claim only rows belonging to this appointment. Used by an inline flush. */
+  appointmentId?: string;
+  /** Seconds of earliness allowed. Zero for the sweep. */
+  toleranceSeconds?: number;
+}
+
 async function claimDue(
   db: Db,
-  limit: number,
-  now: Date | undefined,
+  filter: ClaimFilter,
 ): Promise<Notification[]> {
+  const { limit, now, only, appointmentId, toleranceSeconds = 0 } = filter;
+
   return db.transaction(async (tx) => {
     const due = await tx
       .select({ id: notifications.id })
@@ -124,6 +190,10 @@ async function claimDue(
       .where(
         and(
           eq(notifications.status, "pending"),
+          ...(only ? [eq(notifications.id, only)] : []),
+          ...(appointmentId
+            ? [eq(notifications.appointmentId, appointmentId)]
+            : []),
           /**
            * THE DATABASE'S CLOCK DECIDES, as it does everywhere else in this
            * codebase. The lease below and the backoff are both written with
@@ -133,8 +203,11 @@ async function claimDue(
            * An explicit `now` is for tests, and nothing else passes one.
            */
           now
-            ? lte(notifications.scheduledFor, now)
-            : sql`${notifications.scheduledFor} <= now()`,
+            ? lte(
+                notifications.scheduledFor,
+                new Date(now.getTime() + toleranceSeconds * 1000),
+              )
+            : sql`${notifications.scheduledFor} <= now() + make_interval(secs => ${toleranceSeconds}::int)`,
         ),
       )
       /* Oldest first. A confirmation queued before a reminder should leave
@@ -174,6 +247,25 @@ async function markSent(db: Db, id: string): Promise<void> {
   await db
     .update(notifications)
     .set({ status: "sent", sentAt: new Date(), lastError: null })
+    .where(eq(notifications.id, id));
+}
+
+/**
+ * Withdraw a message whose subject stopped being true.
+ *
+ * `cancelled` rather than `failed`, because nothing went wrong: the product
+ * decided this message should not go, and an owner scanning the outbox for
+ * real delivery problems should not have to sift these out. The reason is
+ * stored anyway, so "why did my customer not get a reminder?" has an answer.
+ */
+async function markCancelled(
+  db: Db,
+  id: string,
+  reason: string,
+): Promise<void> {
+  await db
+    .update(notifications)
+    .set({ status: "cancelled", lastError: reason })
     .where(eq(notifications.id, id));
 }
 
@@ -251,7 +343,7 @@ export interface DrainOptions {
   /**
    * Override "what is due?" with an explicit instant.
    *
-   * For tests only. Left unset — which is every real caller — the DATABASE'''s
+   * For tests only. Left unset — which is every real caller — the DATABASE's
    * clock decides, matching the lease and the backoff.
    */
   now?: Date;
@@ -259,6 +351,24 @@ export interface DrainOptions {
   mailer?: Mailer;
   /** Overrides the configured origin. Used by nothing but tests. */
   origin?: string;
+  /**
+   * Deliver exactly this row and nothing else.
+   *
+   * Set by the scheduled-delivery route, which was woken for one specific
+   * notification. Everything downstream — the claim lease, the liveness check,
+   * the backoff — is identical to the sweep's, because a message must not
+   * behave differently depending on who noticed it was due.
+   */
+  notificationId?: string;
+  /**
+   * Deliver only what is due for this appointment.
+   *
+   * Set by the inline flush that runs after a booking commits when no delivery
+   * service is configured — see `dispatchDeliveries`. It is how a confirmation
+   * still reaches the customer within seconds on a machine with nothing but a
+   * database.
+   */
+  appointmentId?: string;
 }
 
 /**
@@ -275,7 +385,15 @@ export async function drainNotifications(
   options: DrainOptions = {},
 ): Promise<DrainResult> {
   const mailer = options.mailer ?? getMailer();
-  const claimed = await claimDue(db, options.limit ?? DEFAULT_BATCH, options.now);
+  const claimed = await claimDue(db, {
+    limit: options.limit ?? DEFAULT_BATCH,
+    now: options.now,
+    only: options.notificationId,
+    appointmentId: options.appointmentId,
+    /* A targeted delivery was published for an exact instant and may arrive a
+       breath early; the sweep has no such excuse and takes none. */
+    toleranceSeconds: options.notificationId ? CLAIM_TOLERANCE_SECONDS : 0,
+  });
 
   const outcomes: DeliveryOutcome[] = [];
 
@@ -297,6 +415,32 @@ export async function drainNotifications(
             true,
           ),
         );
+        continue;
+      }
+
+      /**
+       * IS THIS STILL TRUE?
+       *
+       * Read at send time, not at queue time. Cancelling an appointment
+       * withdraws its queued messages and calls their scheduled deliveries
+       * off — but a delivery service can fail to cancel one, and a message can
+       * already be in flight. "Your appointment is tomorrow" for a booking
+       * cancelled last week is the worst email this product could send, so the
+       * status is checked once more here, on the row as it stands.
+       */
+      if (
+        REQUIRES_LIVE_APPOINTMENT.includes(row.kind) &&
+        !LIVE_STATUSES.includes(subject.appointment.status)
+      ) {
+        const reason = `Appointment is ${subject.appointment.status}; this message was withdrawn.`;
+
+        await markCancelled(db, row.id, reason);
+        outcomes.push({
+          status: "cancelled",
+          id: row.id,
+          kind: row.kind,
+          reason,
+        });
         continue;
       }
 
@@ -329,6 +473,8 @@ export async function drainNotifications(
     sent: outcomes.filter((outcome) => outcome.status === "sent").length,
     retrying: outcomes.filter((outcome) => outcome.status === "retrying").length,
     failed: outcomes.filter((outcome) => outcome.status === "failed").length,
+    cancelled: outcomes.filter((outcome) => outcome.status === "cancelled")
+      .length,
     mailer: mailer.name,
     outcomes,
   };

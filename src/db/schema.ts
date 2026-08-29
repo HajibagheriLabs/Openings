@@ -105,7 +105,20 @@ export const notificationChannelEnum = pgEnum("notification_channel", ["email"])
 export const notificationStatusEnum = pgEnum("notification_status", [
   "pending",
   "sent",
+  /** Tried until the attempt limit ran out. Terminal, and visible in admin. */
   "failed",
+  /**
+   * The thing this message was about stopped being true before it was sent.
+   *
+   * A reminder for an appointment that was cancelled, or for a time that no
+   * longer exists because the booking moved. Terminal, and deliberately NOT
+   * `failed`: nothing went wrong, and an owner scanning for delivery problems
+   * should not have to sift withdrawn messages out of real ones.
+   *
+   * Last in this list because Postgres appends enum labels and the order here
+   * has to match the migration.
+   */
+  "cancelled",
 ]);
 
 /* ===========================================================================
@@ -267,6 +280,24 @@ export const businesses = pgTable("businesses", {
   cancellationWindowHours: integer("cancellation_window_hours")
     .notNull()
     .default(24),
+
+  /**
+   * How long before an appointment the reminder goes out, in minutes.
+   *
+   * A BUSINESS SETTING, not a constant, because the right answer genuinely
+   * differs: a dentist wants a day's notice so the chair can be refilled, and
+   * a walk-in barber wants two hours so the reminder is still useful. Default
+   * 1440 — the day before.
+   *
+   * It is read when the outbox row is WRITTEN, not when it is sent, so an
+   * owner changing this does not silently move reminders already scheduled
+   * with the delivery service. See `scheduleDueDeliveries`.
+   *
+   * A booking made inside this window gets NO reminder at all: the appointment
+   * is sooner than the reminder would be, and a reminder that fires a minute
+   * after the confirmation reads as a duplicate.
+   */
+  reminderLeadMin: integer("reminder_lead_min").notNull().default(24 * 60),
   allowReschedule: boolean("allow_reschedule").notNull().default(true),
 
   /**
@@ -709,6 +740,30 @@ export const notifications = pgTable(
      * composed and is not persisted anywhere — the row keeps only its hash.
      */
     payload: jsonb("payload").$type<NotificationPayload>(),
+    /**
+     * The delivery service's id for the message that will fire this row, or
+     * NULL when nothing is scheduled.
+     *
+     * WHY IT IS STORED. A reminder is scheduled the moment a booking is
+     * confirmed, for a time that may be weeks away. When the appointment then
+     * moves or is cancelled, that pending message has to be CALLED OFF — and
+     * the only handle on it is the id the service handed back. Without this
+     * column a rescheduled appointment would still fire its old reminder, and
+     * a cancelled one would remind somebody about an appointment that is not
+     * happening.
+     *
+     * NULL is ordinary, not a failure: it means the daily catch-up owns this
+     * row. That is the case for every row when the delivery service is not
+     * configured at all, for anything already overdue when it was written, and
+     * for a confirmation, which is due immediately and never worth a round
+     * trip to schedule.
+     *
+     * It is NOT cleared when a row is withdrawn. On a `cancelled` row it is the
+     * record of which scheduled message was called off, and clearing it in the
+     * same statement that withdrew the row would make the id unreadable from
+     * that statement's RETURNING clause — which is where the canceller reads it.
+     */
+    schedulerMessageId: text("scheduler_message_id"),
     attempts: integer("attempts").notNull().default(0),
     lastError: text("last_error"),
     sentAt: timestamp("sent_at", { withTimezone: true }),

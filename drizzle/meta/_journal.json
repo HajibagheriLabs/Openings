@@ -71,6 +71,20 @@
       "when": 1787968125090,
       "tag": "0009_notifications_owner_and_customer_zone",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1787979865333,
+      "tag": "0010_reminder_lead_and_scheduler_message",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1787979980553,
+      "tag": "0011_notification_cancelled_status",
+      "breakpoints": true
     }
   ]
 }

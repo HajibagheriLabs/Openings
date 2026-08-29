@@ -58,8 +58,6 @@ npm run dev
 
 Nothing is emailed inline with a booking. A booking transaction writes a row to `notifications` and
 commits; a worker drains it, so a mail-provider outage can never roll back a confirmed appointment.
-Drain it with `POST /api/notifications/drain`, authorized by `CRON_SECRET` as a bearer token — that
-is the endpoint the reminder scheduler and the daily cron both call.
 
 Every confirmation, reschedule and cancellation carries a calendar invitation with **one UID for the
 appointment's whole life** and a **SEQUENCE that increments on every change**, so a rescheduled
@@ -67,6 +65,27 @@ appointment moves in the customer's calendar instead of appearing twice. A cance
 `METHOD:CANCEL` and never a stale copy of the old invite alongside it. Because attachment handling
 varies wildly between clients, each message also carries a hosted `.ics` link
 (`/ics/[appointmentId]`) and a Google Calendar link.
+
+## Scheduled delivery
+
+**A Vercel Hobby project may run at most one cron per day, and not at a guaranteed minute.** That is
+unusable for "24 hours before the appointment", so the cron is not the mechanism. Each reminder is
+scheduled individually when the booking is confirmed: an Upstash QStash message with a `notBefore` of
+the reminder's exact instant, addressed to `POST /api/notifications/deliver` and carrying the
+notification id. The delivery is authenticated by QStash's signature over the raw body. Its message
+id is stored on the row, so moving or cancelling the appointment can call it off.
+
+Reminder timing is a business setting, default a day before. A booking made inside that window gets
+no reminder — the appointment is sooner than the reminder would be.
+
+`GET|POST /api/cron/daily` is the **safety net, not the mechanism**: it delivers whatever the
+scheduler did not, reclaims expired holds, and forgets old Stripe event ids. Correctness does not
+depend on it running. It is protected by `CRON_SECRET` as a bearer token, and also accepts a QStash
+signature.
+
+**Without QStash configured the product still works.** Nothing is scheduled, anything already due is
+sent inline the moment a booking is confirmed, and reminders fall to the daily sweep — up to a day
+late, never lost. The admin settings page states which mode is running.
 
 ## Design
 

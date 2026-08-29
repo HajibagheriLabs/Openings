@@ -16,6 +16,7 @@ import {
 } from "@/db/schema";
 import { depositCentsFor } from "@/lib/money";
 import { deriveManageToken } from "@/lib/notifications/manage-link";
+import { reminderInstantFor } from "@/lib/notifications/reminder";
 
 import { buildBlockingRange, type BlockingRange } from "./slot";
 
@@ -517,15 +518,14 @@ async function rebuildRangeForError(
    Confirm a hold — the transaction the whole payment path exists for
    =========================================================================== */
 
-/**
- * How far ahead of the appointment the reminder is queued.
- *
- * A day. Exported so the scheduler that actually sends it reads the same
- * number the webhook wrote the row against — a reminder queued against one
- * lead time and dispatched on another arrives at the wrong hour and looks like
- * a bug in the product rather than in a constant.
+/*
+ * How far ahead of the appointment a reminder goes out is `businesses
+ * .reminder_lead_min`, read inside the transaction that writes the row. It
+ * used to be a constant here; it is a setting because the right answer differs
+ * by trade, and the arithmetic — including the case where there is no reminder
+ * to give — lives in one place: `reminderInstantFor` in
+ * src/lib/notifications/reminder.ts.
  */
-export const REMINDER_LEAD_MINUTES = 24 * 60;
 
 export type ConfirmPaidHoldResult =
   /** The slot was still ours. Booked, and the outbox rows are written. */
@@ -683,6 +683,7 @@ export async function confirmPaidHold(
         .select({
           customerEmail: customers.email,
           businessEmail: businesses.contactEmail,
+          reminderLeadMin: businesses.reminderLeadMin,
         })
         .from(customers)
         .innerJoin(businesses, eq(businesses.id, appointment.businessId))
@@ -690,9 +691,11 @@ export async function confirmPaidHold(
         .limit(1);
 
       if (contact) {
-        const reminderAt = new Date(
-          appointment.startsAt.getTime() - REMINDER_LEAD_MINUTES * 60_000,
-        );
+        const reminderAt = reminderInstantFor({
+          startsAt: appointment.startsAt,
+          reminderLeadMin: contact.reminderLeadMin,
+          now,
+        });
 
         await tx.insert(notifications).values([
           {
@@ -702,11 +705,11 @@ export async function confirmPaidHold(
             toEmail: contact.customerEmail,
             scheduledFor: now,
           },
-          /* A booking made inside the lead time has no reminder to give: the
-             appointment is sooner than the reminder would be. Queueing one for
-             a moment already past would send it immediately, a minute after the
-             confirmation, which reads as a duplicate. */
-          ...(reminderAt.getTime() > now.getTime()
+          /* NULL means a booking made inside the reminder window: the
+             appointment is sooner than the reminder would be, and queueing one
+             for a moment already past would send it immediately, a minute
+             after the confirmation, reading as a duplicate. */
+          ...(reminderAt
             ? [
                 {
                   appointmentId: appointment.id,
@@ -958,7 +961,7 @@ export type ClaimHoldResult =
  *
  * ONE TRANSACTION, THREE WRITES. The customer is found or created, the
  * appointment is claimed, and — when nothing is owed — the outbox rows are
- * written: the customer'''s confirmation and reminder, and the owner'''s copy.
+ * written: the customer's confirmation and reminder, and the owner's copy.
  * Either all three land or none do, which is what stops the two failure modes
  * that matter: a confirmed appointment nobody is ever told about, and a
  * customer row created for a booking that never happened.
@@ -984,6 +987,7 @@ export async function claimHold(
         id: appointments.id,
         manageTokenHash: appointments.manageTokenHash,
         businessEmail: businesses.contactEmail,
+        reminderLeadMin: businesses.reminderLeadMin,
       })
       .from(appointments)
       .innerJoin(businesses, eq(businesses.id, appointments.businessId))
@@ -1079,9 +1083,11 @@ export async function claimHold(
          — the two paths differ in what confirms the appointment, never in what
          the people involved are told. */
       const now = new Date();
-      const reminderAt = new Date(
-        appointment.startsAt.getTime() - REMINDER_LEAD_MINUTES * 60_000,
-      );
+      const reminderAt = reminderInstantFor({
+        startsAt: appointment.startsAt,
+        reminderLeadMin: held.reminderLeadMin,
+        now,
+      });
 
       await tx.insert(notifications).values([
         {
@@ -1093,7 +1099,7 @@ export async function claimHold(
         },
         /* Nothing to remind anybody about when the appointment is sooner than
            the reminder would be. */
-        ...(reminderAt.getTime() > now.getTime()
+        ...(reminderAt
           ? [
               {
                 appointmentId: appointment.id,

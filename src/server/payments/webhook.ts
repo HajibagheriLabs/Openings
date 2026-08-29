@@ -14,6 +14,10 @@ import {
   type Appointment,
 } from "@/db/schema";
 import { bookingUrl } from "@/lib/booking/url";
+import {
+  cancelScheduledDeliveries,
+  dispatchDeliveries,
+} from "@/lib/notifications/delivery";
 import type { OfferedTime } from "@/lib/notifications/payload";
 import {
   CHECKOUT_METADATA,
@@ -47,8 +51,14 @@ import { localDateOf } from "@/server/booking/picker";
  * that check, another project's payments would be looked up in `appointments`,
  * found missing, and logged as poison events on every single charge.
  *
- * The second thing: NOTHING HERE SENDS ANYTHING. Messages are rows in
- * `notifications` and a worker delivers them. See the note in `confirmPaidHold`.
+ * The second thing: NOTHING HERE COMPOSES OR SENDS A MESSAGE INSIDE A
+ * TRANSACTION. Messages are rows in `notifications`, written with the booking;
+ * a worker delivers them. After the transaction commits, `dispatchDeliveries`
+ * hands those rows to the delivery service — or, when none is configured,
+ * sends the already-due ones inline so the product still works on a machine
+ * with nothing but a database. Either way it is after the commit, and either
+ * way it cannot throw: a slow mail provider must never turn a successful
+ * payment into a 500 that Stripe then retries.
  */
 
 /** Every event type this application acts on. Anything else is acknowledged. */
@@ -209,11 +219,27 @@ async function onCheckoutCompleted(
   const result = await confirmPaidHold(db, { appointmentId, paymentIntentId });
 
   switch (result.outcome) {
-    case "confirmed":
+    case "confirmed": {
+      /**
+       * AFTER THE TRANSACTION, NEVER INSIDE IT.
+       *
+       * The booking is committed and the money is taken; this only decides
+       * how quickly the queued messages leave. `dispatchDeliveries` publishes
+       * them to the delivery service — the confirmation for now, the reminder
+       * for its exact minute — or, with no service configured, sends what is
+       * due inline. It never throws: a slow QStash must not be able to turn a
+       * successful payment into a 500 that Stripe then retries.
+       */
+      const dispatched = await dispatchDeliveries(db, appointmentId);
+
       return {
         status: "handled",
-        detail: `confirmed appointment ${appointmentId}`,
+        detail:
+          `confirmed appointment ${appointmentId} ` +
+          `(${dispatched.scheduler}: ${dispatched.scheduled} scheduled, ` +
+          `${dispatched.sentNow} sent, ${dispatched.deferred} deferred)`,
       };
+    }
 
     case "already-confirmed":
       /* A different event id for the same booking — a resend from the
@@ -362,6 +388,20 @@ async function refundAndApologise(
       });
     }
   });
+
+  /**
+   * The appointment is cancelled, so anything still queued against it is no
+   * longer true. In practice a lost slot never reached `confirmed` and so has
+   * no reminder — but the apology row was written a moment ago and this is the
+   * one place that guarantees nothing else is left waiting to contradict it.
+   * The apology itself is dispatched below, after the withdrawal, so it cannot
+   * be caught by it.
+   */
+  await cancelScheduledDeliveries(db, appointment.id, {
+    kinds: ["reminder", "confirmation", "new_booking"],
+  });
+
+  await dispatchDeliveries(db, appointment.id);
 
   console.error(
     `[stripe] SLOT LOST: appointment ${appointment.id} was paid for after its hold ` +
@@ -577,6 +617,10 @@ async function onChargeRefunded(
       });
     }
   });
+
+  /* The owner's alert, on its way. Nothing was queued when the refund was
+     ours, so this is a no-op on that path. */
+  await dispatchDeliveries(db, appointment.id);
 
   return {
     status: "handled",

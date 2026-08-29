@@ -5,6 +5,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import type { SubmitDetailsResult } from "@/lib/booking/details";
 import type { PolicyRefusal } from "@/lib/booking/policy";
+import { dispatchDeliveries } from "@/lib/notifications/delivery";
 import { claimHold } from "@/lib/scheduling/booking";
 import { loadDayView } from "@/lib/scheduling/day-view";
 import {
@@ -258,6 +259,28 @@ export async function submitDetails(
      * it is the same one the confirmation email carries.
      */
     await writeHoldCookie(cookie, CONFIRMED_COOKIE_SECONDS);
+
+    /**
+     * AFTER THE TRANSACTION. The booking is committed; this only decides how
+     * quickly its queued messages leave.
+     *
+     * With a delivery service configured the confirmation is published to it
+     * and arrives seconds later. Without one, it is sent INLINE right here —
+     * which is what makes a fresh clone of this repository produce a real
+     * confirmation email instead of a row waiting for tomorrow's cron.
+     *
+     * Awaited rather than fired and forgotten, because a serverless function
+     * can be frozen the moment its response is returned and an un-awaited
+     * promise would simply stop. It never throws; the worst case is a message
+     * left pending for the daily catch-up.
+     */
+    const dispatched = await dispatchDeliveries(db, claimed.appointment.id);
+
+    console.info(
+      `[booking] ${claimed.appointment.id} confirmed with no deposit ` +
+        `(${dispatched.scheduler}: ${dispatched.scheduled} scheduled, ` +
+        `${dispatched.sentNow} sent, ${dispatched.deferred} deferred)`,
+    );
 
     return { ok: true, outcome: "confirmed" };
   }

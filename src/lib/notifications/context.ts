@@ -101,6 +101,11 @@ export async function loadNotificationSubject(
 
     appointment: {
       id: row.appointment.id,
+      /* Read at SEND time, not at queue time. It is what lets the worker
+         refuse to remind somebody about an appointment that was cancelled
+         after the reminder was queued — the second line of defence behind
+         calling the scheduled message off. */
+      status: row.appointment.status,
       icsUid: row.appointment.icsUid,
       icsSequence: row.appointment.icsSequence,
       startsAt: row.appointment.startsAt,

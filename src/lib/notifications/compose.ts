@@ -9,7 +9,7 @@ import BookingReminder from "../../../emails/booking/reminder";
 import BookingReschedule from "../../../emails/booking/reschedule";
 import SlotLost from "../../../emails/booking/slot-lost";
 
-import type { NotificationKind } from "@/db/schema";
+import type { AppointmentStatus, NotificationKind } from "@/db/schema";
 import { formatInstant, formatInstantRange } from "@/components/time-text";
 import { bookingUrl } from "@/lib/booking/url";
 import { cancellationPolicyLines } from "@/lib/booking/policy";
@@ -81,6 +81,8 @@ export interface NotificationSubject {
 
   appointment: {
     id: string;
+    /** As it stands NOW, not as it stood when the message was queued. */
+    status: AppointmentStatus;
     icsUid: string;
     /** 0 at confirmation, incremented by every write that changes the event. */
     icsSequence: number;

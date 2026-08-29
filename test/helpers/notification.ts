@@ -49,6 +49,7 @@ export function subjectFor(
 
     appointment: {
       id: "1c0a8f2e-4b3d-4f7a-8c19-2d3e4f5a6b70",
+      status: "confirmed",
       icsUid: ICS_UID,
       icsSequence: 0,
       startsAt: STARTS_AT,
