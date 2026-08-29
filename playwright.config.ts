@@ -81,7 +81,16 @@ export default defineConfig({
     command: SKIP_BUILD
       ? `npx next start --port ${PORT}`
       : `npm run build && npx next start --port ${PORT}`,
-    url: BASE_URL,
+    /**
+     * A PORT, NOT A URL, and the difference cost a CI run.
+     *
+     * Playwright's URL probe waits for a response under 400, and the landing
+     * page it would have hit reads the database. Against a container that is
+     * ten seconds old and not yet migrated that is a 500, so the server was up,
+     * answering, and reported as one that never started. Waiting on the port
+     * asks the only question this check should ask.
+     */
+    port: PORT,
     /**
      * A COLD NEXT BUILD ON A TWO-CORE RUNNER, and the number is set by that
      * rather than by what a developer's laptop does.

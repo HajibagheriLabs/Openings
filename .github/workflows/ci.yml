@@ -191,6 +191,14 @@ jobs:
       - name: Create the browser suite's database
         run: psql "$DATABASE_URL" -c 'CREATE DATABASE openings_e2e'
 
+      # Before the server starts, not from inside the suite: an application
+      # pointed at an unmigrated database cannot serve its own front page, and
+      # the deployment applies migrations first for the same reason.
+      - name: Migrate the browser suite's database
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+
       # Chromium only. Three engines is three downloads for a suite whose job
       # is to prove the wiring, not to survey rendering.
       - name: Install Chromium
