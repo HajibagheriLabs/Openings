@@ -31,6 +31,18 @@ import { e2eDatabaseUrl } from "./e2e/fixtures/database";
 const PORT = Number(process.env.E2E_PORT ?? 3100);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
+/**
+ * Whether the caller has already built the application.
+ *
+ * Locally, nobody wants to remember to build before testing, so the suite does
+ * it. In CI the build is its own step, for two reasons: a cold Next build on a
+ * two-core runner is most of the job's time and it should be visible as its
+ * own line rather than hidden inside "starting the web server", and a build
+ * that fails should say so instead of surfacing as a server that never
+ * answered.
+ */
+const SKIP_BUILD = Boolean(process.env.E2E_SKIP_BUILD);
+
 /** Resolved once, and shared with the server the suite starts. */
 const DATABASE_URL = e2eDatabaseUrl();
 
@@ -66,7 +78,9 @@ export default defineConfig({
   ],
 
   webServer: {
-    command: `npm run build && npx next start --port ${PORT}`,
+    command: SKIP_BUILD
+      ? `npx next start --port ${PORT}`
+      : `npm run build && npx next start --port ${PORT}`,
     url: BASE_URL,
     /**
      * A COLD NEXT BUILD ON A TWO-CORE RUNNER, and the number is set by that
@@ -80,7 +94,7 @@ export default defineConfig({
      * patience on a run that was going to be slow anyway; the job's own
      * timeout is the real bound.
      */
-    timeout: 900_000,
+    timeout: SKIP_BUILD ? 120_000 : 900_000,
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
