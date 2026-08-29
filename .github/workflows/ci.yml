@@ -15,6 +15,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # THE VERSION DEVELOPMENT USES, not merely the one package.json will tolerate.
+  # `engines` says >=22.12 and that is still true, but the lockfile is written
+  # by the npm that ships with this one, and `npm ci` is strict about a lockfile
+  # a different major wrote. Pinning it here keeps CI installing exactly what a
+  # developer installs.
+  NODE_VERSION: "24"
+
   # Every job needs these to import the application at all, and none of them is
   # a secret: the database is a container that lives for one job, and the auth
   # secret signs sessions nobody will ever hold.
@@ -40,10 +47,17 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - run: npm ci
+
+      # `npm ci` reports the useful part of a failure to a log file rather than
+      # to stdout, and that file is not in the artifacts. Printing it here is
+      # the difference between "exit code 1" and a sentence naming the package.
+      - name: Show the npm log if the install failed
+        if: failure()
+        run: cat "$(npm config get cache)/_logs/"*.log || true
 
       - run: npm run typecheck
 
@@ -85,10 +99,17 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - run: npm ci
+
+      # `npm ci` reports the useful part of a failure to a log file rather than
+      # to stdout, and that file is not in the artifacts. Printing it here is
+      # the difference between "exit code 1" and a sentence naming the package.
+      - name: Show the npm log if the install failed
+        if: failure()
+        run: cat "$(npm config get cache)/_logs/"*.log || true
 
       # The integration suite truncates tables, so it refuses to share a
       # database with anything else — including the one the app would use.
@@ -144,10 +165,17 @@ jobs:
 
       - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - run: npm ci
+
+      # `npm ci` reports the useful part of a failure to a log file rather than
+      # to stdout, and that file is not in the artifacts. Printing it here is
+      # the difference between "exit code 1" and a sentence naming the package.
+      - name: Show the npm log if the install failed
+        if: failure()
+        run: cat "$(npm config get cache)/_logs/"*.log || true
 
       - name: Create the browser suite's database
         run: psql "$DATABASE_URL" -c 'CREATE DATABASE openings_e2e'
