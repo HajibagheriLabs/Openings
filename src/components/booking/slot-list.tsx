@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Loader2 } from "lucide-react";
+import { Check } from "lucide-react";
 
 import {
   formatCountdown,
@@ -112,10 +112,13 @@ export function SlotList({
                 </span>
 
                 {pending ? (
-                  <Loader2
-                    aria-hidden="true"
-                    className="size-4 shrink-0 animate-spin"
-                  />
+                  /* NOT A SPINNER. "Nothing else animates" is a rule of this
+                     design system, and a rotating icon is decoration standing
+                     in for progress. The row is already disabled and dimmed;
+                     the word says what is happening. */
+                  <span className="type-body-sm shrink-0 text-ink-muted">
+                    Holding
+                  </span>
                 ) : selected ? (
                   <span className="flex shrink-0 items-center gap-2">
                     {countdown ? (
@@ -128,10 +131,13 @@ export function SlotList({
                 ) : null}
 
                 {selected ? (
+                  /* Deliberately NOT the seconds. This is the button's own
+                     accessible name, and a name that changes once a second is
+                     a name a screen reader re-reads once a second. The
+                     remaining time is announced at its thresholds by the
+                     sticky summary, which is the one place that says it. */
                   <span className="sr-only">
-                    {countdown
-                      ? `Held for you, ${countdown.secondsRemaining} seconds left`
-                      : "Selected"}
+                    {countdown ? "Held for you" : "Selected"}
                   </span>
                 ) : null}
               </button>

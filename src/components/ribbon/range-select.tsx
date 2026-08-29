@@ -41,7 +41,6 @@ export function RangeSelectLayer({
   snapMinutes,
   minMinutes,
   onSelect,
-  label,
 }: {
   columnId: string;
   window: RibbonWindow;
@@ -51,8 +50,6 @@ export function RangeSelectLayer({
   /** A flick of the wrist is not a range. Shorter drags are discarded. */
   minMinutes: number;
   onSelect: (columnId: string, range: RibbonRange) => void;
-  /** Names the drag surface for assistive technology. */
-  label: string;
 }) {
   const surface = useRef<HTMLDivElement>(null);
   const anchor = useRef<number | null>(null);
@@ -79,8 +76,19 @@ export function RangeSelectLayer({
   return (
     <div
       ref={surface}
+      /**
+       * `presentation`, and therefore NO label.
+       *
+       * The two contradict each other: a presentation role takes the element
+       * out of the accessibility tree, so a label on it is one nobody can ever
+       * read. axe flags it, and the fix is not to pick a role that accepts the
+       * label — dragging a range out of the strip is a pointer gesture with no
+       * keyboard equivalent, and exposing it would advertise something a
+       * keyboard user cannot do. Their path to the same result is the "Block
+       * time" button above the ribbon, which opens the same sheet with the
+       * same fields.
+       */
       role="presentation"
-      aria-label={label}
       /**
        * `pan-y`, NOT `none`.
        *

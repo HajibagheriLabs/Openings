@@ -1,12 +1,14 @@
 "use client";
 
 import { Contact, Search } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Card } from "@/components/card";
 import { EmptyState } from "@/components/empty-state";
 import { PageHeader } from "@/components/page-header";
+import { PillButton } from "@/components/pill-button";
 import { StatusBadge } from "@/components/status-badge";
 import { formatInstantDate } from "@/components/time-text";
 import { Input } from "@/components/ui/input";
@@ -44,6 +46,19 @@ export function CustomersManager({
 }) {
   const router = useRouter();
   const [term, setTerm] = useState(query);
+
+  /**
+   * Empty the search, both halves of it.
+   *
+   * The box the owner is looking at is component state and the results are a
+   * URL. Clearing one without the other leaves the screen contradicting
+   * itself, so this does both and skips the debounce — a press of a button is
+   * not a keystroke to wait out.
+   */
+  function clearSearch() {
+    setTerm("");
+    router.replace("/admin/customers", { scroll: false });
+  }
   const [selected, setSelected] = useState<CustomerRow | null>(null);
 
   useEffect(() => {
@@ -95,6 +110,20 @@ export function CustomersManager({
             query
               ? "Try part of a name, an email address, or the phone number they gave."
               : "Customers appear here the first time somebody books, or the first time you add a booking by hand."
+          }
+          action={
+            query ? (
+              /* Clearing the box IS the action, and it has to clear both — the
+                 field the owner is looking at and the query in the URL that
+                 produced this screen. */
+              <PillButton variant="secondary" onClick={clearSearch}>
+                Clear the search
+              </PillButton>
+            ) : (
+              <PillButton asChild>
+                <Link href="/admin/calendar">Add a booking</Link>
+              </PillButton>
+            )
           }
         />
       ) : (

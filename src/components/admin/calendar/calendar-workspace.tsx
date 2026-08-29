@@ -1,9 +1,20 @@
 "use client";
 
-import { CalendarOff, Plus, Radio, RefreshCw, WifiOff } from "lucide-react";
+import {
+  CalendarOff,
+  List,
+  Plus,
+  Radio,
+  RefreshCw,
+  Rows3,
+  Users,
+  WifiOff,
+} from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 
+import { EmptyState } from "@/components/empty-state";
 import { PillButton } from "@/components/pill-button";
 import {
   Ribbon,
@@ -23,6 +34,7 @@ import {
 import type { AgendaAppointment, DaySummary } from "@/lib/scheduling/agenda";
 import { cn } from "@/lib/utils";
 
+import { AgendaList } from "./agenda-list";
 import { AppointmentSheet } from "./appointment-sheet";
 import { BlockTimeSheet } from "./block-time-sheet";
 import { DateNavigator } from "./date-navigator";
@@ -168,6 +180,15 @@ export function CalendarWorkspace({
     ? formatLocalMinutes(roundUpTo(nowMinute, slotGranularityMin))
     : formatLocalMinutes(ribbonWindow.startMinute);
 
+  /**
+   * Which reading of the day is on screen.
+   *
+   * Interaction state, so it lives here and not in the URL: it is a preference
+   * about this screen right now, not a thing to link somebody to. The list is
+   * a genuine equivalent, not a fallback — see ./agenda-list.tsx.
+   */
+  const [view, setView] = useState<"ribbon" | "list">("ribbon");
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -186,6 +207,27 @@ export function CalendarWorkspace({
 
         <div className="flex flex-wrap items-center gap-2">
           <StreamIndicator status={status} />
+
+          {/* Two readings of one day, the same control the customer's picker
+              uses. See ./agenda-list.tsx for why the owner gets one. */}
+          <div
+            role="group"
+            aria-label="How to show the day"
+            className="flex items-center gap-1 rounded-pill border border-line bg-surface p-1"
+          >
+            <ViewToggle
+              active={view === "ribbon"}
+              onClick={() => setView("ribbon")}
+              icon={<Rows3 aria-hidden="true" className="size-4" />}
+              label="To scale"
+            />
+            <ViewToggle
+              active={view === "list"}
+              onClick={() => setView("list")}
+              icon={<List aria-hidden="true" className="size-4" />}
+              label="List"
+            />
+          </div>
 
           <PillButton
             size="sm"
@@ -231,7 +273,7 @@ export function CalendarWorkspace({
         )}
       >
         <div className="flex min-w-0 flex-col gap-3">
-          {nowMinute !== null ? (
+          {nowMinute !== null && view === "ribbon" ? (
             <div className="flex justify-end">
               <PillButton
                 variant="quiet"
@@ -244,13 +286,24 @@ export function CalendarWorkspace({
           ) : null}
 
           {columns.length === 0 ? (
-            <div className="rounded-card border border-dashed border-line bg-surface px-6 py-12 text-center">
-              <p className="type-section text-ink">Nobody to draw yet</p>
-              <p className="type-body mx-auto mt-2 max-w-[48ch] text-ink-muted">
-                Add a staff member and the calendar gets a column. Until then
-                there is no diary to keep.
-              </p>
-            </div>
+            <EmptyState
+              icon={Users}
+              title="Nobody to draw yet"
+              description="Add a staff member and the calendar gets a column. Until then there is no diary to keep."
+              action={
+                <PillButton asChild>
+                  <Link href="/admin/staff">Add someone</Link>
+                </PillButton>
+              }
+            />
+          ) : view === "list" ? (
+            <AgendaList
+              columns={columns}
+              timeZone={timeZone}
+              onSelectSegment={(segment, columnId) =>
+                selectSegment(segment.id, columnId)
+              }
+            />
           ) : (
             <Ribbon
               ref={ribbon}
@@ -277,19 +330,35 @@ export function CalendarWorkspace({
             />
           )}
 
-          <p className="type-body-sm text-ink-faint">
-            Drag on any empty stretch to block it out. Press an appointment to
-            open it.
-          </p>
+          {view === "ribbon" ? (
+            <>
+              <p className="type-body-sm text-ink-faint">
+                Drag on any empty stretch to block it out. Press an appointment
+                to open it.
+              </p>
 
-          <RibbonLegend
-            states={["open", "held", "booked", "blocked"]}
-            className="max-w-[46ch]"
-          />
+              <RibbonLegend
+                states={["open", "held", "booked", "blocked"]}
+                className="max-w-[46ch]"
+              />
+            </>
+          ) : (
+            <p className="type-body-sm text-ink-faint">
+              Press an appointment to open it. Blocking time out is drawn on the
+              strip — switch to “To scale” for that.
+            </p>
+          )}
         </div>
 
         {isDay && summary && appointments ? (
           <TodayPanel
+            onAddBooking={() =>
+              setBooking({
+                date: params.date,
+                startLocal: defaultStart,
+                staffId: params.staffId ?? staff[0]?.id ?? null,
+              })
+            }
             summary={summary}
             appointments={appointments}
             currency={currency}
@@ -365,6 +434,40 @@ export function CalendarWorkspace({
  * its promise. The wording is plain and none of it is alarming: polling still
  * works, it is just slower.
  */
+/**
+ * One half of the view switch.
+ *
+ * Deliberately identical to the customer picker's, down to the class list: it
+ * is the same control doing the same job on the other side of the product, and
+ * two toggles that behave the same should look the same.
+ */
+function ViewToggle({
+  active,
+  onClick,
+  icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "type-body-sm inline-flex h-8 items-center gap-2 rounded-pill px-3",
+        active ? "bg-surface-sunk text-ink" : "text-ink-muted hover:text-ink",
+      )}
+    >
+      {icon}
+      {label}
+    </button>
+  );
+}
+
 function StreamIndicator({ status }: { status: AgendaStreamStatus }) {
   const { Icon, text } = INDICATOR[status];
 

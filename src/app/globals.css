@@ -24,7 +24,18 @@
   /* Ink */
   --ink:           oklch(0.2202 0.0041 128.67); /* #1A1B19 */
   --ink-muted:     oklch(0.4892 0.0082 124.59); /* #5F615C */
-  --ink-faint:     oklch(0.6523 0.0094 128.62); /* #8E918B */
+  /* #696C66, not the palette's #8E918B.
+
+     ═══ THE ONE PLACE THE PALETTE MOVED, AND WHY ═══
+
+     --ink-faint carries the 11px uppercase label, which is the SMALLEST TEXT
+     IN THE PRODUCT, plus every hint under a figure. #8E918B measured 2.7:1 on
+     the canvas and 2.5:1 on a sunk surface — under half of what WCAG AA asks
+     of normal text, and failing it on the type that needs the help most. This
+     is the lightest value in the same hue that clears 4.5:1 on white, on the
+     canvas and on --surface-sunk. It is still visibly a third tier under
+     --ink-muted; it is no longer a decorative grey pretending to be text. */
+  --ink-faint:     oklch(0.5267 0.0099 128.67); /* #696C66 */
 
   /* The single accent: verdigris. Open time, primary buttons, focus, selection. */
   --accent:          oklch(0.4583 0.0751 183.71);       /* #14655C */
@@ -58,11 +69,44 @@
 
   --ink:           oklch(0.9402 0.007 88.64);   /* #EDEBE6 */
   --ink-muted:     oklch(0.7088 0.0089 121.69); /* #A0A29C */
-  --ink-faint:     oklch(0.5619 0.0108 119.74); /* #74766F */
+  /* #84877F — the dark counterpart of the light-mode move above. #74766F
+     measured 3.6:1 on --surface. Same reasoning, same target. */
+  --ink-faint:     oklch(0.6184 0.0123 123.59); /* #84877F */
 
   --accent:          oklch(0.6672 0.093 183.33);        /* #46A79A */
-  --accent-wash:     oklch(0.6672 0.093 183.33 / 0.16); /* rgba(70,167,154,.16) */
-  --accent-contrast: oklch(1 0 0);                      /* #FFFFFF */
+  /* .14, not the palette's .16.
+
+     The accent is also the TEXT on this wash — an open slot is accent type on
+     an accent tint — and at .16 that pair measured 4.44:1 on --surface, which
+     misses AA by six hundredths. Two points of alpha darkens the tint enough
+     to clear it (4.59:1) and is not a difference anybody can see. The light
+     theme's .10 already passes and is untouched. */
+  --accent-wash:     oklch(0.6672 0.093 183.33 / 0.14); /* rgba(70,167,154,.14) */
+  /* ═══ NOT WHITE IN THE DARK THEME ═══
+
+     The dark accent is a LIGHT colour — #46A79A sits at 0.67 lightness — so
+     white on it measures 2.9:1. Every primary button, every selected slot and
+     the whole of the "Held for you" segment were failing AA by a wide margin,
+     which on the selected slot means the one thing the customer most needs to
+     read. --accent-contrast means "whatever contrasts with the accent", and in
+     this theme that is the canvas ink: 6.2:1, and the same colour the page is
+     already made of. */
+  --accent-contrast: oklch(0.2059 0.0059 285.87);       /* #17171A */
+
+  /* ═══ THE SYSTEM STATES, LIGHTENED FOR A DARK SURFACE ═══
+
+     The palette gives one value for each of these and no dark counterpart,
+     which left #2E7D5B, #9A6A12 and #B3453B — all mid-dark colours chosen to
+     sit on white — printing themselves onto #1E1F22 at 3.0–3.5:1. They are
+     chrome, so they only ever appear as a badge or a toast, but a badge that
+     says "Cancelled" is exactly the badge that has to be readable.
+
+     Same hue, same chroma, lifted until each clears 4.5:1 on the darkest of
+     the three dark surfaces. They stay chrome; they still never touch the
+     ribbon. */
+  --confirmed:     oklch(0.6058 0.1096 161.61); /* #37966D */
+  --pending:       oklch(0.6249 0.1259 75.36);  /* #B37B15 */
+  --cancelled:     oklch(0.6346 0.1246 26.64);  /* #CB6A61 */
 
   --shadow-float: 0 12px 32px -14px oklch(0 0 0 / 0.6),
                   0 2px 8px -4px oklch(0 0 0 / 0.4);

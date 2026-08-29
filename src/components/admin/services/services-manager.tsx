@@ -12,6 +12,7 @@ import { PageHeader } from "@/components/page-header";
 import { PillButton } from "@/components/pill-button";
 import { ReorderableList } from "@/components/reorderable-list";
 import { StatusBadge } from "@/components/status-badge";
+import { formatDuration } from "@/components/time-text";
 import { ToggleSwitch } from "@/components/toggle-switch";
 import { describeDeposit, formatCents } from "@/lib/money";
 import { blockedMinutes } from "@/lib/scheduling/blocked-time";
@@ -388,7 +389,14 @@ function ServiceRowView({
             <li key={reason} className="type-body-sm text-ink-muted">
               <span className="text-ink">{UNBOOKABLE_COPY[reason].summary}.</span>{" "}
               {reason === "off-grid"
-                ? `Your booking interval is ${slotGranularityMin} minutes; ${service.durationMin} is not a multiple of it.`
+                ? /* Both halves in the same units. The old sentence read
+                     "...is 15 minutes; 50 is not a multiple of it", which
+                     leaves the reader working out what 50 is measured in. */
+                  `This service is ${formatDuration(
+                    service.durationMin,
+                  )} and your booking interval is ${formatDuration(
+                    slotGranularityMin,
+                  )}, which does not divide into it.`
                 : UNBOOKABLE_COPY[reason].fix}
             </li>
           ))}

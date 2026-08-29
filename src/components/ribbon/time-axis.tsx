@@ -79,7 +79,20 @@ export function TimeAxis({
   return (
     <div
       aria-hidden="true"
-      className={cn("relative w-14 shrink-0 select-none", className)}
+      /**
+       * PINNED WHILE THE LANES SCROLL SIDEWAYS.
+       *
+       * A week is seven columns and a busy day can be five staff members, so
+       * the strip scrolls horizontally on anything narrower than a desk. A
+       * ruler that scrolls away with it makes the whole drawing unreadable —
+       * the segments are still to scale, but there is nothing left to read the
+       * scale AGAINST. So it sticks to the left edge, over an opaque surface,
+       * above the lanes (z-10) and below the sticky column headings (z-20).
+       */
+      className={cn(
+        "sticky left-0 z-10 w-14 shrink-0 select-none bg-surface",
+        className,
+      )}
     >
       {hours.map((minute) => (
         <span

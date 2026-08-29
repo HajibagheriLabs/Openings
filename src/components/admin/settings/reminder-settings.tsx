@@ -1,6 +1,5 @@
 "use client";
 
-import { Loader2 } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -99,9 +98,6 @@ export function ReminderSettings({
             onClick={save}
             disabled={pending || value === saved}
           >
-            {pending ? (
-              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-            ) : null}
             {pending ? "Saving" : "Save"}
           </PillButton>
         </div>

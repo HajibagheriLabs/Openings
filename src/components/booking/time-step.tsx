@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { toast } from "sonner";
 
 import { BookingShell } from "@/components/booking/booking-shell";
+import { EmptyState } from "@/components/empty-state";
 import { SlotList } from "@/components/booking/slot-list";
 import { StepHeading } from "@/components/booking/step-heading";
 import {
@@ -25,6 +26,7 @@ import {
   formatInstantDate,
   formatInstantRange,
 } from "@/components/time-text";
+import { bookingUrl } from "@/lib/booking/url";
 import {
   POLL_INTERVAL_MS,
   type HoldSnapshot,
@@ -567,6 +569,12 @@ export function TimeStep({
 
   const dayLabel = formatInstantDate(day.dayInstant, day.timeZone);
 
+  /* One step back: the same service and person, no day chosen. */
+  const dayPickerHref = bookingUrl(slug, {
+    service: service.id,
+    staff: staffId ?? undefined,
+  });
+
   const segments: RibbonSegment[] = [
     /* Taken material first, so a ghost drawn on top of it wins for the moment
        it is on screen. */
@@ -631,6 +639,24 @@ export function TimeStep({
     }),
   ];
 
+  /**
+   * The one sentence assistive technology hears about the hold.
+   *
+   * Derived from the hold and from ONE boolean — is it inside the last minute
+   * — so it is byte-identical between ticks and the live region stays silent
+   * until the fact changes. The total is read off the hold's own window rather
+   * than off the counter, for the same reason.
+   */
+  const announcement = !hold
+    ? ""
+    : countdown.warning
+      ? `Less than a minute left on ${formatInstant(hold.startsAt, day.timeZone)}. Continue now or it goes back into the day.`
+      : `${formatInstant(hold.startsAt, day.timeZone)} is held for you for ${formatDuration(
+          Math.round(
+            (Date.parse(hold.expiresAt) - Date.parse(hold.takenAt)) / 60000,
+          ),
+        )} while you finish booking.`;
+
   const summary = hold ? (
     <div className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex min-w-0 flex-col gap-1">
@@ -663,10 +689,21 @@ export function TimeStep({
         </PillButton>
       </div>
 
+      {/* ═══ THE COUNTDOWN IS ANNOUNCED AT THRESHOLDS, NOT ON EVERY TICK ═══
+
+          This used to hold the running clock, which meant a live region whose
+          contents changed once a second — and a screen reader that says
+          "seven minutes twelve" over the top of whatever the person was
+          actually reading, four hundred and eighty times. Unusable, and worse
+          than saying nothing at all.
+
+          What is in here now only changes when something HAPPENS: a hold is
+          taken, or it drops under a minute. Expiry is announced by the notice
+          above, which is its own live region and names the time that went. The
+          digits keep ticking beside this, aria-hidden, for people who can see
+          them. */}
       <p role="status" className="sr-only">
-        {countdown.warning
-          ? "Less than a minute left on your slot."
-          : `Your slot is held for ${formatCountdown(countdown.secondsRemaining)}.`}
+        {announcement}
       </p>
     </div>
   ) : (
@@ -723,18 +760,20 @@ export function TimeStep({
         ) : null}
 
         {day.offers.length === 0 ? (
-          <div className="flex flex-col items-start gap-3 rounded-card border border-dashed border-line bg-surface px-5 py-6">
-            <CalendarOff aria-hidden="true" className="size-5 text-ink-faint" />
-            <p className="type-section text-ink">
-              {day.closed
+          <EmptyState
+            icon={CalendarOff}
+            title={
+              day.closed
                 ? "Closed on this day"
-                : "Every time on this day has gone"}
-            </p>
-            <p className="type-body text-ink-muted">
-              Go back a step and pick another day — the calendar only offers
-              days with something free.
-            </p>
-          </div>
+                : "Every time on this day has gone"
+            }
+            description="The calendar only offers days with something free, so the next one you pick will have room."
+            action={
+              <PillButton asChild>
+                <Link href={dayPickerHref}>Pick another day</Link>
+              </PillButton>
+            }
+          />
         ) : (
           <>
             <div className="flex items-center justify-between gap-4">

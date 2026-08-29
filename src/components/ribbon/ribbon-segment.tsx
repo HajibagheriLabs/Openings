@@ -68,6 +68,9 @@ export function RibbonSegmentView({
   timeZone,
   locale,
   onSelect,
+  tabIndex,
+  onKeyDown,
+  registerRef,
 }: {
   segment: RibbonSegment;
   window: { startMinute: number; endMinute: number };
@@ -75,6 +78,15 @@ export function RibbonSegmentView({
   timeZone: string;
   locale?: string;
   onSelect?: (segment: RibbonSegment) => void;
+  /**
+   * The roving tab stop. 0 on exactly one segment in the whole ribbon and -1
+   * on the rest, so Tab enters the strip once and the arrow keys move within
+   * it. See the note on the keyboard grid in ./ribbon.tsx.
+   */
+  tabIndex?: number;
+  onKeyDown?: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
+  /** Lets the ribbon move focus without reaching into the DOM by id. */
+  registerRef?: (id: string, element: HTMLButtonElement | null) => void;
 }) {
   const top = offsetPx(segment.startMinute, window, pxPerMin);
   const height = lengthPx(segment.durationMin, pxPerMin);
@@ -146,6 +158,25 @@ export function RibbonSegmentView({
   const fadingHatch =
     segment.justTaken && (segment.state === "held" || segment.state === "blocked");
 
+  /**
+   * ═══ PAST OPEN TIME IS NOT DRAWN IN THE ACCENT ═══
+   *
+   * Verdigris means one thing on this strip: time you can book. A slot that
+   * has already gone by is not that, however it was classified when the server
+   * built the day — so on the owner's agenda, where free time from this
+   * morning is still drawn, it takes the `past` material instead of an accent
+   * wash at 45%. Two things fall out of it, and both are wanted: the accent
+   * keeps meaning exactly one thing, and accent type on an accent tint at 45%
+   * — which measures 2:1 — stops existing.
+   *
+   * The STATE ITSELF IS UNTOUCHED. `description` below still says "open,
+   * already passed", because that is what it is; this is how it is drawn.
+   */
+  const drawnState: SegmentState =
+    segment.isPast && (segment.state === "open" || segment.state === "selected")
+      ? "past"
+      : segment.state;
+
   const body = (
     <>
       {fadingHatch ? (
@@ -168,7 +199,7 @@ export function RibbonSegmentView({
 
         {!compact ? (
           <span className="type-body-sm truncate font-medium">
-            {segment.label ?? STATE_LABEL[segment.state]}
+            {segment.label ?? STATE_LABEL[drawnState]}
           </span>
         ) : null}
       </span>
@@ -189,12 +220,27 @@ export function RibbonSegmentView({
 
   const shared = cn(
     "absolute inset-x-1 flex items-center overflow-hidden rounded-segment px-2 text-left",
-    STATE_CLASSES[segment.state],
+    STATE_CLASSES[drawnState],
     // The pattern comes from the fading overlay instead, so it is not painted
     // twice and does not appear before the fade has started.
     fadingHatch && "bg-none",
-    // 45%, whether the segment IS the past or merely happened in it.
-    (segment.isPast || segment.state === "past") && "opacity-45",
+    /* ═══ 45% WHEN IT IS INERT, 70% WHEN IT IS STILL A BUTTON ═══
+
+       The design system's rule for `past` is 45% and "no interaction, no
+       pointer cursor" — the two halves belong together. A lapsed slot on the
+       customer's picker is an inactive component, which is exactly the case
+       WCAG exempts from its contrast rule, so 45% is honest there and stays.
+
+       The owner's agenda dims THIS MORNING'S APPOINTMENTS the same way and
+       they are not inert: pressing one opens the sheet, which is where a
+       no-show gets marked. An active control has to stay readable, and 45%
+       puts its text under 4.5:1 in both themes. 70% is the quietest that
+       passes, and it still reads unmistakably as "done". */
+    (segment.isPast || segment.state === "past") &&
+      (inert ? "opacity-45" : "opacity-70"),
+    /* At 70% the muted ink in the state class no longer clears 4.5:1, so a
+       past segment that can still be pressed says its time in full --ink. */
+    !inert && segment.isPast && "text-ink",
     // 240ms is the one transition on the ribbon: a slot someone else takes
     // fades to hatched rather than snapping. globals.css drops it entirely
     // under prefers-reduced-motion.
@@ -228,7 +274,10 @@ export function RibbonSegmentView({
   return (
     <button
       type="button"
+      ref={(element) => registerRef?.(segment.id, element)}
       onClick={() => onSelect?.(segment)}
+      onKeyDown={onKeyDown}
+      tabIndex={tabIndex}
       aria-label={description}
       aria-pressed={segment.state === "selected"}
       className={cn(shared, "touch-manipulation")}

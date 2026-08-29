@@ -1,6 +1,7 @@
 "use client";
 
 import { CalendarClock, Plus, Trash2, Users } from "lucide-react";
+import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
 import { toast } from "sonner";
 
@@ -58,7 +59,12 @@ export function HoursManager({
         <EmptyState
           icon={Users}
           title="Nobody to give hours to"
-          description="Hours belong to a person, not to the business — that is what lets two people work different days. Add someone on the Staff page first."
+          description="Hours belong to a person, not to the business — that is what lets two people work different days. Add someone first and their week opens up here."
+          action={
+            <PillButton asChild>
+              <Link href="/admin/staff">Add someone</Link>
+            </PillButton>
+          }
         />
       </div>
     );

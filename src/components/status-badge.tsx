@@ -14,11 +14,27 @@ import { cn } from "@/lib/utils";
 
 export type StatusTone = "confirmed" | "pending" | "cancelled" | "neutral";
 
+/**
+ * ═══ THE FILL IS --surface, NOT A TINT OF THE TONE ═══
+ *
+ * These used to be `bg-confirmed/10`, which is a translucent tint — so the
+ * colour underneath it decided what the word was actually printed on. On a
+ * white row "Confirmed" measured 5.0:1; on the sunk fill of a past row the
+ * same badge measured 3.4:1 and failed AA, purely because of what it happened
+ * to be sitting on. A chip that changes legibility depending on the row is a
+ * chip that cannot be reasoned about.
+ *
+ * An opaque --surface fill fixes it once, everywhere, and it is the more
+ * honest shape anyway: a badge is a small piece of material laid on the page,
+ * with a hairline round it and the state written in colour. The tone is still
+ * carried by the border and the word, and the word is still there for anybody
+ * who cannot see either.
+ */
 const TONE_CLASSES: Record<StatusTone, string> = {
-  confirmed: "border-confirmed/30 bg-confirmed/10 text-confirmed",
-  pending: "border-pending/30 bg-pending/10 text-pending",
-  cancelled: "border-cancelled/30 bg-cancelled/10 text-cancelled",
-  neutral: "border-line bg-surface-sunk text-ink-muted",
+  confirmed: "border-confirmed/40 bg-surface text-confirmed",
+  pending: "border-pending/40 bg-surface text-pending",
+  cancelled: "border-cancelled/40 bg-surface text-cancelled",
+  neutral: "border-line bg-surface text-ink-muted",
 };
 
 /**

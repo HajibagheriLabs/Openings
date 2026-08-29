@@ -7,6 +7,7 @@ import { useMemo, useTransition } from "react";
 
 import { BookingShell } from "@/components/booking/booking-shell";
 import { StepHeading } from "@/components/booking/step-heading";
+import { EmptyState } from "@/components/empty-state";
 import { PillButton } from "@/components/pill-button";
 import { formatInstant, formatInstantDate } from "@/components/time-text";
 import { Calendar } from "@/components/ui/calendar";
@@ -137,37 +138,33 @@ export function DateStep({
         </div>
 
         {summary.openings === 0 ? (
-          <div className="flex flex-col items-start gap-4 rounded-card border border-dashed border-line bg-surface px-5 py-6">
-            <CalendarOff aria-hidden="true" className="size-5 text-ink-faint" />
-
-            <div className="flex flex-col gap-2">
-              <p className="type-section text-ink">
-                Nothing free this month
-              </p>
-              <p className="type-body text-ink-muted">
-                {nextOpen
-                  ? `The next opening is ${formatInstantDate(
-                      nextOpen.startsAt,
-                      summary.timeZone,
-                    )} at ${formatInstant(nextOpen.startsAt, summary.timeZone)}.`
-                  : "There is nothing free between now and as far ahead as this business takes bookings. Get in touch and they will find you a time."}
-              </p>
-            </div>
-
-            {/* The shortcut moves the CALENDAR, it does not make the choice.
-                Landing somebody on a day they never tapped would be faster and
-                would take the decision off them. */}
-            {nextOpen ? (
-              <PillButton
-                variant="secondary"
-                onClick={() => go({ month: nextOpen.month })}
-              >
-                {`Show ${formatInstant(nextOpen.startsAt, summary.timeZone, {
-                  month: "long",
-                })}`}
-              </PillButton>
-            ) : null}
-          </div>
+          <EmptyState
+            icon={CalendarOff}
+            title="Nothing free this month"
+            description={
+              nextOpen
+                ? `The next opening is ${formatInstantDate(
+                    nextOpen.startsAt,
+                    summary.timeZone,
+                  )} at ${formatInstant(nextOpen.startsAt, summary.timeZone)}.`
+                : "There is nothing free between now and as far ahead as this business takes bookings. Get in touch and they will find you a time."
+            }
+            action={
+              /* The shortcut moves the CALENDAR, it does not make the choice.
+                 Landing somebody on a day they never tapped would be faster
+                 and would take the decision off them. */
+              nextOpen ? (
+                <PillButton
+                  variant="secondary"
+                  onClick={() => go({ month: nextOpen.month })}
+                >
+                  {`Show ${formatInstant(nextOpen.startsAt, summary.timeZone, {
+                    month: "long",
+                  })}`}
+                </PillButton>
+              ) : undefined
+            }
+          />
         ) : null}
       </section>
     </BookingShell>

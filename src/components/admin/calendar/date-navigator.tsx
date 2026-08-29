@@ -94,10 +94,14 @@ export function DateNavigator({
           asChild
           variant={isToday ? "primary" : "secondary"}
           size="sm"
-          /* Pressed when you are already on it — the button stays visible
-             rather than disappearing, so the target does not move under the
-             cursor as the days go by. */
-          aria-pressed={isToday}
+          /* `aria-current`, NOT `aria-pressed`. This is a link, and
+             aria-pressed is only valid on something that has a pressed state.
+             axe calls it a critical violation and is right to: a screen reader
+             announcing "pressed" on a navigation link describes a control that
+             does not exist. The button stays visible when you are already on
+             today rather than disappearing, so the target does not move under
+             the cursor as the days go by; `aria-current` is what says so. */
+          aria-current={isToday ? "date" : undefined}
         >
           <Link href={todayHref} scroll={false}>
             Today

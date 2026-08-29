@@ -50,12 +50,20 @@ export function BookingShell({
   return (
     <div className="flex min-h-dvh flex-col">
       {showProgress ? (
-        <ProgressLine
-          step={step}
-          total={totalSteps}
-          label="Booking progress"
-          className="sticky top-0 z-30 rounded-none"
-        />
+        /* The bar is wrapped rather than made sticky itself, and it is a
+           <header> rather than a bare div: a progressbar sitting outside every
+           landmark is content a screen reader user cannot reach by landmark
+           navigation, which axe reports and which is exactly the sort of thing
+           that only shows up when somebody navigates that way. The sticky
+           lives on the wrapper so the behaviour is unchanged. */
+        <header className="sticky top-0 z-30">
+          <ProgressLine
+            step={step}
+            total={totalSteps}
+            label="Booking progress"
+            className="rounded-none"
+          />
+        </header>
       ) : null}
 
       <div className="mx-auto flex w-full max-w-[560px] justify-end px-5 pt-4">
@@ -65,9 +73,11 @@ export function BookingShell({
       <main
         className={cn(
           "mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-8 px-5 pt-2",
-          // Room for the sticky bar, so the last control is never trapped
-          // underneath it.
-          summary ? "pb-40" : "pb-12",
+          /* Room for the sticky bar, so the last control is never trapped
+             underneath it. 176px clears the tallest the bar gets — the time
+             step, where it carries the held range, the countdown and the
+             button — with room left for the home indicator on a phone. */
+          summary ? "pb-44" : "pb-12",
           className,
         )}
       >
@@ -77,11 +87,22 @@ export function BookingShell({
       </main>
 
       {summary ? (
-        <div className="sticky bottom-0 z-30 border-t border-line bg-surface shadow-float">
-          <div className="mx-auto w-full max-w-[560px] px-5 py-4">
+        /* A named region, not a div. It holds the chosen time, the hold
+           countdown and the button that moves the booking on — the most
+           important thing on the page after the picker itself — and a landmark
+           is how somebody who is not looking at it gets there directly. */
+        <section
+          aria-label="Your booking"
+          className="sticky bottom-0 z-30 border-t border-line bg-surface shadow-float"
+        >
+          {/* The extra bottom padding is the phone's home indicator. Without
+              it the Continue button sits under the swipe area on every
+              modern iPhone, which is the single most-tapped control in the
+              flow and the one it is least acceptable to lose. */}
+          <div className="mx-auto w-full max-w-[560px] px-5 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
             {summary}
           </div>
-        </div>
+        </section>
       ) : null}
 
       {/* Toasts are CHROME — the only surface allowed the system-state

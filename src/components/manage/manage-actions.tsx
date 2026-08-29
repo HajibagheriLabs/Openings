@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarClock, Loader2, X } from "lucide-react";
+import { CalendarClock, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
@@ -182,8 +182,7 @@ export function ManageActions({
         ) : null}
 
         {cancelPending ? (
-          <p className="type-body-sm flex items-center gap-2 text-ink-muted">
-            <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+          <p className="type-body-sm text-ink-muted">
             Cancelling — this takes a moment if a refund is going back.
           </p>
         ) : null}

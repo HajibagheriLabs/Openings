@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, Mail } from "lucide-react";
+import { Clock, Mail } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -162,10 +162,13 @@ export function ConfirmingStep({
               role="status"
               className="flex items-center gap-3 rounded-card border border-line bg-surface px-5 py-4"
             >
-              <Loader2
-                aria-hidden="true"
-                className="size-4 animate-spin text-accent"
-              />
+              {/* A clock face, not a spinner. What this is waiting for is
+                  Stripe's webhook, which takes as long as it takes; a rotating
+                  ring implies a measurable amount of progress and there is
+                  none to report. The only motion in this product is the hold
+                  countdown, the 240ms fade on a slot somebody took, and the
+                  agenda scrolling to now. */}
+              <Clock aria-hidden="true" className="size-4 shrink-0 text-accent" />
               <p className="type-body text-ink-muted">
                 Waiting for confirmation. Keep this page open.
               </p>
@@ -210,10 +213,7 @@ export function ConfirmingStep({
                 onClick={() => void recheck()}
                 disabled={rechecking}
               >
-                {rechecking ? (
-                  <Loader2 aria-hidden="true" className="animate-spin" />
-                ) : null}
-                Check again
+                {rechecking ? "Checking" : "Check again"}
               </PillButton>
 
               <PillButton asChild variant="quiet">

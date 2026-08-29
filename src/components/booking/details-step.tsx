@@ -1,6 +1,6 @@
 "use client";
 
-import { CreditCard, Loader2, TriangleAlert } from "lucide-react";
+import { Clock, CreditCard, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
@@ -258,6 +258,11 @@ export function DetailsStep({
       ? `Pay ${formatCents(summary.depositCents, summary.currency)} deposit`
       : "Confirm booking";
 
+  /* Present tense, and specific about which of the two things is happening —
+     "Taking you to payment" is a promise about the next screen. */
+  const pendingLabel =
+    summary.depositCents > 0 ? "Taking you to payment" : "Confirming";
+
   return (
     <BookingShell
       step={step}
@@ -296,17 +301,20 @@ export function DetailsStep({
               </span>
             ) : (
               <PillButton type="submit" form="booking-details" disabled={pending}>
-                {pending ? (
-                  <Loader2 aria-hidden="true" className="animate-spin" />
-                ) : null}
-                {submitLabel}
+                {/* The label carries the pending state. A disabled pill at 50%
+                    opacity saying "Confirming" is clearer than the same pill
+                    with a rotating icon on it, and it does not animate. */}
+                {pending ? pendingLabel : submitLabel}
               </PillButton>
             )}
 
+            {/* Announced at its thresholds, never on the tick. See the
+                same note on the picker: a live region carrying a running
+                clock talks over everything else once a second. */}
             <p role="status" className="sr-only">
               {countdown.warning
-                ? "Less than a minute left on your slot."
-                : `Your slot is held for ${formatCountdown(countdown.secondsRemaining)}.`}
+                ? "Less than a minute left on your slot. Finish now or it goes back into the day."
+                : "Your slot is held while you fill this in."}
             </p>
           </div>
         )
@@ -557,7 +565,7 @@ function PaymentHandoff({
         role="status"
         className="flex items-center gap-3 rounded-card border border-line bg-surface px-5 py-4"
       >
-        <Loader2 aria-hidden="true" className="size-4 animate-spin text-accent" />
+        <Clock aria-hidden="true" className="size-4 shrink-0 text-accent" />
         <p className="type-body text-ink-muted">
           Taking you to the secure payment page.
         </p>
@@ -588,10 +596,7 @@ function PaymentHandoff({
           </p>
 
           <PillButton onClick={onRetry} disabled={retrying}>
-            {retrying ? (
-              <Loader2 aria-hidden="true" className="animate-spin" />
-            ) : null}
-            Try the payment page again
+            {retrying ? "Trying again" : "Try the payment page again"}
           </PillButton>
         </>
       ) : null}

@@ -1,9 +1,10 @@
 "use client";
 
-import { CalendarClock } from "lucide-react";
+import { CalendarClock, Plus } from "lucide-react";
 
 import { Card, CardBody, CardHeader } from "@/components/card";
 import { EmptyState } from "@/components/empty-state";
+import { PillButton } from "@/components/pill-button";
 import { StatusBadge } from "@/components/status-badge";
 import { formatDuration, formatInstantRange } from "@/components/time-text";
 import { GAP_THRESHOLD_MIN } from "@/lib/admin/calendar";
@@ -37,6 +38,7 @@ export function TodayPanel({
   timeZone,
   nowInstant,
   onOpenAppointment,
+  onAddBooking,
   heading,
 }: {
   summary: DaySummary;
@@ -55,6 +57,8 @@ export function TodayPanel({
    */
   nowInstant: string;
   onOpenAppointment: (appointmentId: string) => void;
+  /** Opens the manual booking sheet. The one action an empty day offers. */
+  onAddBooking: () => void;
   /** "Today" on the day itself, the date otherwise. */
   heading: string;
 }) {
@@ -164,7 +168,13 @@ export function TodayPanel({
             <EmptyState
               icon={CalendarClock}
               title="Nothing in the diary"
-              description="Drag on the ribbon to block time out, or add a booking by hand."
+              description="No appointments on this day yet. Customers can still book it, and you can put one in yourself."
+              action={
+                <PillButton size="sm" onClick={onAddBooking}>
+                  <Plus aria-hidden="true" />
+                  Add a booking
+                </PillButton>
+              }
               className="border-none bg-transparent px-0 py-4"
             />
           </CardBody>
@@ -176,10 +186,26 @@ export function TodayPanel({
                   type="button"
                   onClick={() => onOpenAppointment(appointment.id)}
                   className={cn(
-                    "flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-surface-sunk",
-                    /* 45%, the same value the ribbon dims a past segment to.
-                       Two surfaces, one rule. */
-                    Date.parse(appointment.endsAt) < nowMs && "opacity-45",
+                    "flex w-full min-h-11 items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-surface-sunk",
+                    /* ═══ SUNK, NOT DIMMED ═══
+
+                       The ribbon draws a past segment at 45% and that is right
+                       THERE: a lapsed slot on the customer's picker is inert,
+                       and WCAG exempts an inactive component from its contrast
+                       rule precisely because there is nothing to act on.
+
+                       This row is not inert. It is a button, and pressing it is
+                       how the owner marks somebody a no-show — a decision made
+                       only after the appointment did not happen. Opacity is the
+                       wrong tool for an active control twice over: it puts both
+                       lines under 4.5:1, and because opacity makes a group, the
+                       status badge inside cannot opt back out of it.
+
+                       So the row is CARVED instead of faded. --surface-sunk is
+                       already this design system's word for material that has
+                       been used up, it is the fill under every booked segment
+                       on the ribbon, and it changes no text contrast at all. */
+                    Date.parse(appointment.endsAt) < nowMs && "bg-surface-sunk",
                   )}
                 >
                   <span className="type-time w-28 shrink-0 text-ink">
@@ -230,6 +256,15 @@ const STATUS_WORD: Record<AgendaAppointment["status"], string> = {
   no_show: "No-show",
 };
 
+/**
+ * One figure in the day's summary.
+ *
+ * The hint lives INSIDE the `<dd>`, not beside it. A `<div>` in a `<dl>` may
+ * group one term with its descriptions and nothing else, so a stray `<p>` in
+ * there is invalid — axe reports it, and it also leaves the hint orphaned from
+ * the number it qualifies. Nested in the description it is read as part of the
+ * same answer, which is what it is.
+ */
 function Figure({
   label,
   value,
@@ -242,8 +277,12 @@ function Figure({
   return (
     <div className="flex flex-col gap-1">
       <dt className="type-label">{label}</dt>
-      <dd className="type-time-lg text-ink">{value}</dd>
-      {hint ? <p className="type-body-sm text-ink-faint">{hint}</p> : null}
+      <dd className="flex flex-col gap-1">
+        <span className="type-time-lg text-ink">{value}</span>
+        {hint ? (
+          <span className="type-body-sm text-ink-faint">{hint}</span>
+        ) : null}
+      </dd>
     </div>
   );
 }

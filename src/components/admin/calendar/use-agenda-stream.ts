@@ -44,6 +44,21 @@ import {
  *             that silently stopped updating would be worse than a slow one.
  *             It keeps trying the stream in the background and returns to it
  *             the moment one connects.
+ *
+ * ═══ A HIDDEN TAB IS NOT POLLED ═══
+ *
+ * The fallback poll is a full `router.refresh()` — a server render and five
+ * queries — every few seconds. An owner who leaves the calendar open in a
+ * background tab all day would pay for that all day, and nobody would ever see
+ * a single one of those renders. So the timer stops on `visibilitychange` and
+ * starts again on the way back, with ONE immediate refresh: everything that
+ * happened while the tab was hidden happened at once as far as this page is
+ * concerned, and one render catches all of it.
+ *
+ * The stream itself is left open, deliberately. It is a connection the server
+ * is already holding and it costs nothing to keep — and closing it would mean
+ * a reconnect (and a fresh render) every time somebody flicks to their mail
+ * app and back, which is more work than it saves, not less.
  */
 
 export type AgendaStreamStatus = "connecting" | "live" | "polling";
@@ -78,20 +93,32 @@ export function useAgendaStream({
     let poll: ReturnType<typeof setInterval> | null = null;
     let failures = 0;
     let stopped = false;
+    /** True while the fallback is in force, whether or not its timer is armed. */
+    let polling = false;
 
-    const stopPolling = () => {
+    /** Disarm the timer but stay in the fallback. What a hidden tab does. */
+    const pausePolling = () => {
       if (poll) {
         clearInterval(poll);
         poll = null;
       }
     };
 
+    const stopPolling = () => {
+      polling = false;
+      pausePolling();
+    };
+
     const startPolling = () => {
-      if (poll) {
+      polling = true;
+      setStatus("polling");
+
+      /* Armed only for a tab somebody can actually see. `onVisibility` arms it
+         on the way back. */
+      if (poll || document.visibilityState !== "visible") {
         return;
       }
 
-      setStatus("polling");
       poll = setInterval(() => router.refresh(), STREAM_POLL_FALLBACK_MS);
     };
 
@@ -160,11 +187,28 @@ export function useAgendaStream({
       };
     }
 
+    const onVisibility = () => {
+      if (!polling) {
+        return;
+      }
+
+      if (document.visibilityState === "visible") {
+        /* One render for everything that happened while nobody was looking,
+           then back on the timer. */
+        router.refresh();
+        startPolling();
+      } else {
+        pausePolling();
+      }
+    };
+
     connect();
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       stopped = true;
       source?.close();
+      document.removeEventListener("visibilitychange", onVisibility);
 
       if (reconnect) {
         clearTimeout(reconnect);

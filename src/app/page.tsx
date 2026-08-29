@@ -192,7 +192,11 @@ export default async function Home({
             </p>
             <p className="type-time-lg text-ink">{TEST_CARD.number}</p>
             <p className="type-body-sm text-ink-muted">{TEST_CARD.extra}</p>
-            <p className="type-body-sm text-ink-faint">
+            {/* --ink-muted, not --ink-faint. The faint tier clears AA on the
+                canvas and on a surface, and this panel is neither: it is an
+                accent wash, which sits between them and takes the ratio to
+                3.9:1. The tier below is the fix, not a new colour. */}
+            <p className="type-body-sm text-ink-muted">
               Stripe test mode. No real money can move through this, and the
               card number is Stripe&rsquo;s own published test value.
             </p>

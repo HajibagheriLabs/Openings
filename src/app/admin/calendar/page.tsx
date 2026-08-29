@@ -1,16 +1,23 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Suspense } from "react";
 
 import { CalendarWorkspace } from "@/components/admin/calendar/calendar-workspace";
 import { PageHeader } from "@/components/page-header";
+import { SkeletonRibbon, SkeletonTodayPanel } from "@/components/skeleton";
 import type { RibbonColumn } from "@/components/ribbon";
 import { formatInstant, formatInstantDate } from "@/components/time-text";
-import { calendarHref, type CalendarStaffOption } from "@/lib/admin/calendar";
+import {
+  calendarHref,
+  type CalendarParams,
+  type CalendarStaffOption,
+} from "@/lib/admin/calendar";
 import {
   getOwnedBusiness,
   requireBusinessAccess,
   requireUser,
 } from "@/lib/auth-server";
+import type { Business } from "@/db/schema";
 import { localDateOf } from "@/lib/scheduling/local-minutes";
 import {
   dayWindowOf,
@@ -92,6 +99,84 @@ export default async function CalendarPage({
      unfiltered calendar. */
   const focusServiceId = uuidOrNull(search.service);
 
+  const isWeek = params.view === "week";
+
+  /**
+   * The heading needs nothing but the URL, so it is written here and the
+   * queries are Suspended behind it. The owner sees the frame, the title and a
+   * ribbon-shaped placeholder at the right scale immediately; the diary fills
+   * in underneath without moving anything.
+   *
+   * The fallback is keyed on the SEARCH PARAMS. Without that, paging from
+   * Tuesday to Wednesday re-uses the existing boundary and the old day stays on
+   * screen until the new one resolves — which looks like a page that ignored
+   * the click. A new key remounts the boundary, so the placeholder appears at
+   * once and the ribbon it is standing in for is the one that was asked for.
+   */
+  return (
+    <div className="flex flex-col gap-8">
+      <PageHeader
+        eyebrow="Calendar"
+        title={isWeek ? "The week" : "The day"}
+        description={
+          isWeek
+            ? "Seven days at the same proportional scale, zoomed out. Press a day to work in it."
+            : "One column per staff member, drawn to scale. Press an appointment to open it, drag an empty stretch to block it out."
+        }
+      />
+
+      <Suspense
+        key={`${params.view}:${params.date}:${params.staffId ?? ""}:${focusServiceId ?? ""}`}
+        fallback={
+          isWeek ? (
+            <SkeletonRibbon
+              window={{ startMinute: 8 * 60, endMinute: 20 * 60 }}
+              pxPerMin={WEEK_PX_PER_MIN}
+              columns={7}
+              columnHeaders
+              label="Loading the week"
+            />
+          ) : (
+            <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+              <SkeletonRibbon
+                columns={2}
+                columnHeaders
+                label="Loading the day"
+              />
+              <SkeletonTodayPanel />
+            </div>
+          )
+        }
+      >
+        <CalendarBody
+          business={business}
+          params={params}
+          today={today}
+          now={now}
+          focusServiceId={focusServiceId}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+/**
+ * Everything that costs a query. Split out purely so the heading above it can
+ * paint first; the loads, the shaping and the props are unchanged.
+ */
+async function CalendarBody({
+  business,
+  params,
+  today,
+  now,
+  focusServiceId,
+}: {
+  business: Business;
+  params: CalendarParams;
+  today: string;
+  now: Date;
+  focusServiceId: string | null;
+}) {
   const [options, focus] = await Promise.all([
     loadCalendarOptions(business.id),
     focusServiceId
@@ -121,12 +206,6 @@ export default async function CalendarPage({
 
     return (
       <div className="flex flex-col gap-8">
-        <PageHeader
-          eyebrow="Calendar"
-          title="The week"
-          description="Seven days at the same proportional scale, zoomed out. Press a day to work in it."
-        />
-
         <ServiceFocusNotice focus={focus} staffId={params.staffId} />
 
         <CalendarWorkspace
@@ -181,12 +260,6 @@ export default async function CalendarPage({
 
   return (
     <div className="flex flex-col gap-8">
-      <PageHeader
-        eyebrow="Calendar"
-        title="The day"
-        description="One column per staff member, drawn to scale. Press an appointment to open it, drag an empty stretch to block it out."
-      />
-
       <ServiceFocusNotice focus={focus} staffId={params.staffId} />
 
       <CalendarWorkspace
