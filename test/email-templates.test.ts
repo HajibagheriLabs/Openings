@@ -28,6 +28,8 @@ const EVERY_KIND: NotificationKind[] = [
   "new_booking",
   "slot_lost",
   "refund",
+  "owner_reschedule",
+  "owner_cancellation",
 ];
 
 describe("every template", () => {
@@ -114,7 +116,12 @@ describe("every template", () => {
    * in the business's inbox is a link that cancels a customer's appointment.
    */
   it("keeps the customer's manage link out of the owner's messages", async () => {
-    for (const kind of ["new_booking", "refund"] as const) {
+    for (const kind of [
+      "new_booking",
+      "refund",
+      "owner_reschedule",
+      "owner_cancellation",
+    ] as const) {
       const message = await composeNotification(subjectFor(kind));
 
       expect(message.html, kind).not.toContain("/manage/");
@@ -183,8 +190,14 @@ describe("the confirmation", () => {
     expect(message.text).toContain("€70.00");
     expect(message.text).toContain("€90.00");
 
+    /* THE TOKEN IS THE WHOLE ADDRESS — no appointment id in the path. A link
+       pasted into a support chat leaks one fewer identifier, and the route
+       hashes what it is given to find the row. */
     expect(message.html).toContain(
-      "https://openings.example/manage/1c0a8f2e-4b3d-4f7a-8c19-2d3e4f5a6b70",
+      "https://openings.example/manage/manage-token-for-tests",
+    );
+    expect(message.html).not.toContain(
+      "/manage/1c0a8f2e-4b3d-4f7a-8c19-2d3e4f5a6b70",
     );
     /* The two calendar fallbacks, because attachment handling is a lottery. */
     expect(message.html).toContain("https://openings.example/ics/");

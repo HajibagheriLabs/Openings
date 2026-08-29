@@ -66,6 +66,25 @@ appointment moves in the customer's calendar instead of appearing twice. A cance
 varies wildly between clients, each message also carries a hosted `.ics` link
 (`/ics/[appointmentId]`) and a Google Calendar link.
 
+## Guests manage their own appointments
+
+Customers never have an account. Every booking email links to `/manage/<token>`, where the token is a
+bearer credential and the whole of the authorization — only its SHA-256 is stored, and the route finds
+the appointment by hashing what it is given. Links expire 60 days after the appointment ends, derived
+from `ends_at` rather than stored, so a rescheduled booking cannot keep a stale expiry. **An invalid
+or expired link is never a bare 404**: an expired one names the business and its contact details, and
+an unknown one explains what probably went wrong.
+
+From that page a customer can **move** or **cancel**, when the policy allows. Both share one window —
+the notice the business asks for — because otherwise the cancellation policy is walked around by
+moving the appointment to next month and cancelling it from there. A move is one atomic UPDATE
+arbitrated by the exclusion constraint, so a lost race leaves the customer with the appointment they
+started with rather than none; it bumps `ics_sequence`, sends an updated invite under the same UID,
+re-queues the reminder, and tells the owner. A cancel frees the slot immediately, sends
+`METHOD:CANCEL`, withdraws the reminder, refunds the deposit when the business's policy says to — and
+says on screen, before the button, when it does not. Both are idempotent in SQL, so a double-clicked
+Cancel cannot attempt two refunds. The route is rate-limited by token and by IP.
+
 ## Scheduled delivery
 
 **A Vercel Hobby project may run at most one cron per day, and not at a guaranteed minute.** That is

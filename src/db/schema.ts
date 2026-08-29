@@ -93,10 +93,26 @@ export const notificationKindEnum = pgEnum("notification_kind", [
    *
    * Written alongside the customer's confirmation, in the same transaction, so
    * a business always learns about a booking from the product rather than from
-   * the person turning up. Last in this list because Postgres appends enum
-   * labels and the order here has to match the migration.
+   * the person turning up.
    */
   "new_booking",
+  /**
+   * To the OWNER: a customer moved their own appointment from the manage page.
+   *
+   * The diary changed without anybody at the business touching it, which is
+   * exactly the thing they must not find out by looking. Carries the old time
+   * in the payload, because the row no longer does.
+   */
+  "owner_reschedule",
+  /**
+   * To the OWNER: a customer cancelled their own appointment.
+   *
+   * Says whether the deposit went back, because that is the owner's next
+   * question and the answer is already decided by the time this is written.
+   * Last in this list because Postgres appends enum labels and the order here
+   * has to match the migration.
+   */
+  "owner_cancellation",
 ]);
 
 /** Only email today. The enum exists so adding `sms` is a migration, not a refactor. */
@@ -299,6 +315,26 @@ export const businesses = pgTable("businesses", {
    */
   reminderLeadMin: integer("reminder_lead_min").notNull().default(24 * 60),
   allowReschedule: boolean("allow_reschedule").notNull().default(true),
+
+  /**
+   * Does an in-time cancellation put the deposit back?
+   *
+   * TRUE BY DEFAULT, because a customer who cancels inside the notice the
+   * business asked for has done exactly what was asked of them, and keeping
+   * their money for it is how a business earns a chargeback.
+   *
+   * A business that turns this off is not doing anything wrong — a deposit
+   * that is really a booking fee is a legitimate model — but the customer is
+   * then told, in words, on the confirm screen, BEFORE they press the button.
+   * Nobody is ever surprised about money by this product. See
+   * `describeCancellationOutcome`.
+   *
+   * A LATE cancellation is refused outright rather than charged, so this
+   * setting only ever governs the in-time case.
+   */
+  refundDepositOnCancel: boolean("refund_deposit_on_cancel")
+    .notNull()
+    .default(true),
 
   /**
    * Authorize the deposit now and capture it later, instead of charging it at
@@ -695,6 +731,16 @@ export const appointments = pgTable(
     index("appointments_customer_id_idx").on(t.customerId),
     index("appointments_service_id_idx").on(t.serviceId),
     /**
+     * THE MANAGE PAGE'S ONLY LOOKUP KEY.
+     *
+     * `/manage/<token>` carries no appointment id, so the route hashes the
+     * token and finds the row by that hash. UNIQUE because the token is
+     * derived from `ics_uid`, which is itself unique — so the index both makes
+     * the lookup an index seek and turns "two appointments share a manage
+     * token" from a silent disaster into a write that fails.
+     */
+    unique("appointments_manage_token_hash_unique").on(t.manageTokenHash),
+    /**
      * An anonymous appointment is a HOLD and nothing else. See the note on
      * `customer_id`. Enforced by the database rather than by convention,
      * because the moment it is only a convention some code path will confirm
@@ -798,6 +844,38 @@ export const webhookEvents = pgTable("webhook_events", {
   processedAt: timestamp("processed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+});
+
+/* ===========================================================================
+   rate_limits — a fixed-window counter shared by every instance
+   ---------------------------------------------------------------------------
+   IN POSTGRES RATHER THAN IN MEMORY, and that is the whole reason this table
+   exists. The manage page is a public URL whose only credential is a secret in
+   the path; the thing worth rate-limiting is somebody guessing at that path,
+   and a per-process counter on a serverless runtime counts a different
+   attacker on every cold start. One row, one atomic upsert, shared by every
+   instance.
+
+   NOT A QUEUE AND NOT A LOG. A fixed window keeps exactly one row per subject
+   and overwrites it when the window rolls, so the table's size is bounded by
+   the number of distinct subjects currently active rather than by traffic. The
+   daily sweep deletes what has gone quiet.
+   =========================================================================== */
+
+export const rateLimits = pgTable("rate_limits", {
+  /**
+   * The subject being limited, namespaced by what it is.
+   *
+   * `manage:token:<sha256>` or `manage:ip:<sha256>`. HASHED, both of them: an
+   * IP address is personal data and a manage token is a live credential, and
+   * neither belongs in a table in plaintext just to be counted.
+   */
+  key: text("key").primaryKey(),
+  /** When the current window opened. A request past its end resets the count. */
+  windowStartedAt: timestamp("window_started_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  count: integer("count").notNull().default(0),
 });
 
 /* ===========================================================================

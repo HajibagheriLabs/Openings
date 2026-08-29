@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { countScheduled, countUnscheduled } from "@/lib/notifications/delivery";
 import { drainNotifications } from "@/lib/notifications/worker";
 import { reclaimExpiredHolds } from "@/lib/scheduling/booking";
+import { forgetIdleRateLimits } from "@/server/booking/rate-limit";
 import { forgetOldWebhookEvents } from "@/server/payments/webhook";
 import { authorizeCron, isSignedByScheduler } from "@/server/scheduled/authorize";
 
@@ -119,6 +120,11 @@ async function run(request: Request) {
     const outbox = await drainNotifications(db, { limit: CATCH_UP_BATCH });
     const holds = await reclaimExpiredHolds(db);
     const events = await forgetOldWebhookEvents();
+    /* Rate-limit rows for subjects that have gone quiet. Nothing depends on
+       this: a stale row is reset in place by the next request from that
+       subject, so it only stops the table remembering every address that ever
+       visited a manage link. */
+    const limits = await forgetIdleRateLimits(db);
 
     /* What the sweep is still carrying versus what has a delivery booked. The
        first number growing is the signal that scheduling is broken. */
@@ -138,6 +144,8 @@ async function run(request: Request) {
       holdsReclaimed: holds,
       /** Stripe event ids older than the retry window. */
       webhookEventsForgotten: events,
+      /** Idle rate-limit counters. */
+      rateLimitsForgotten: limits,
       pending: { scheduled, awaitingCatchUp: unscheduled },
     };
 

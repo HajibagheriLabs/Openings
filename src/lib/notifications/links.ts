@@ -22,18 +22,21 @@ export function absoluteUrl(origin: string, path: string): string {
   return `${origin.replace(/\/+$/, "")}${path}`;
 }
 
-/** Where the customer goes to see, move or cancel their appointment. */
-export function manageUrl(
-  origin: string,
-  appointmentId: string,
-  manageToken: string,
-): string {
-  return absoluteUrl(
-    origin,
-    `/manage/${appointmentId}?${MANAGE_TOKEN_PARAM}=${encodeURIComponent(
-      manageToken,
-    )}`,
-  );
+/**
+ * Where the customer goes to see, move or cancel their appointment.
+ *
+ * THE TOKEN IS THE WHOLE ADDRESS. No appointment id, because the id adds
+ * nothing an attacker does not already need the token for, and leaving it out
+ * means a link pasted into a support chat leaks one fewer identifier. The route
+ * hashes what it is given and finds the row by that hash.
+ *
+ * A PATH SEGMENT RATHER THAN A QUERY PARAMETER, for two reasons that both
+ * matter for a credential: query strings are the part of a URL that logging,
+ * analytics and Referer headers copy most eagerly, and a path is what survives
+ * a mail client rewriting a link for click tracking.
+ */
+export function manageUrl(origin: string, manageToken: string): string {
+  return absoluteUrl(origin, `/manage/${encodeURIComponent(manageToken)}`);
 }
 
 /**

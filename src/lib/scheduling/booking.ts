@@ -13,6 +13,7 @@ import {
   notifications,
   services,
   type Appointment,
+  type AppointmentStatus,
 } from "@/db/schema";
 import { depositCentsFor } from "@/lib/money";
 import { deriveManageToken } from "@/lib/notifications/manage-link";
@@ -1148,6 +1149,263 @@ export async function readOwnAppointment(
   }
 
   return row;
+}
+
+/* ===========================================================================
+   The customer moves their own appointment
+   =========================================================================== */
+
+export interface MoveAppointmentInput {
+  appointmentId: string;
+  /** The customer's new start. The end is recomputed from the service. */
+  startsAt: Date | string;
+}
+
+export type MoveAppointmentResult =
+  /** Moved. `previous` is what it was, for the email that has to say both. */
+  | {
+      outcome: "moved";
+      appointment: Appointment;
+      previous: { startsAt: Date; endsAt: Date };
+    }
+  /** Somebody else has the new time. The appointment is UNTOUCHED. */
+  | { outcome: "slot-taken" }
+  /** Not a live booking any more — cancelled, completed, or never confirmed. */
+  | { outcome: "not-movable"; status: AppointmentStatus | null }
+  /** Already sitting on exactly that instant. A double submit; nothing to do. */
+  | { outcome: "unchanged"; appointment: Appointment };
+
+/**
+ * Move a confirmed appointment to a new time — IN ONE TRANSACTION, AND WITHOUT
+ * EVER LETTING GO OF THE OLD SLOT FIRST.
+ *
+ * ═══ WHY THIS IS AN UPDATE AND NOT A RELEASE-THEN-BOOK ═══
+ *
+ * The obvious shape — cancel the old appointment, then book the new time — has
+ * a failure mode that is unacceptable in a booking product: if the second half
+ * loses a race, the customer is left with NO appointment at all, having asked
+ * only to move one. No amount of retrying fixes that, because by then their
+ * original slot may be gone too.
+ *
+ * So the row is never released. One UPDATE rewrites `slot`, `starts_at` and
+ * `ends_at` in place, and the exclusion constraint arbitrates the new range
+ * exactly as it arbitrates an insert. Because it is the SAME ROW, the old
+ * range stops blocking and the new one starts blocking in a single atomic
+ * statement — and the constraint does not compare a row against itself, so a
+ * move that overlaps the appointment's own old span is legal, which "release
+ * then re-book" could not express at all.
+ *
+ * If the new range collides, Postgres raises 23P01, the transaction rolls back,
+ * and THE APPOINTMENT IS EXACTLY WHERE IT WAS. That is the whole guarantee: the
+ * customer either has the new time or still has the old one, never neither.
+ *
+ * ═══ WHAT ELSE MOVES WITH IT ═══
+ *
+ * `ics_sequence` is incremented, because the invite that goes out has to be
+ * NEWER than the one already in the customer's calendar or every client will
+ * correctly ignore it. The UID is untouched — same appointment, same event,
+ * moved. See src/lib/notifications/invite.ts.
+ *
+ * The money does not move. `price_cents` and `deposit_cents` are snapshots from
+ * booking time and the deposit is already paid against this row; a reschedule
+ * is not a new sale, and re-pricing somebody who moved a haircut by an hour
+ * would be indefensible.
+ *
+ * Nothing is emailed here. The caller writes the outbox rows.
+ */
+export async function moveAppointment(
+  db: Db,
+  input: MoveAppointmentInput,
+): Promise<MoveAppointmentResult> {
+  const startsAt =
+    typeof input.startsAt === "string"
+      ? new Date(input.startsAt)
+      : input.startsAt;
+
+  try {
+    return await db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(appointments)
+        .where(eq(appointments.id, input.appointmentId))
+        .limit(1);
+
+      if (!current || current.status !== "confirmed") {
+        return {
+          outcome: "not-movable" as const,
+          status: current?.status ?? null,
+        };
+      }
+
+      /**
+       * IDEMPOTENCY, and it is not optional.
+       *
+       * A double-submitted move must not bump `ics_sequence` twice and send a
+       * second invite for a time nothing changed about. Comparing the instant
+       * is exact — both sides are `timestamptz` — so "already there" is a fact
+       * rather than a guess.
+       */
+      if (current.startsAt.getTime() === startsAt.getTime()) {
+        return { outcome: "unchanged" as const, appointment: current };
+      }
+
+      /* The service is read INSIDE the transaction, so the buffers written
+         into the new range are the ones the database currently holds. */
+      const [service] = await tx
+        .select()
+        .from(services)
+        .where(eq(services.id, current.serviceId))
+        .limit(1);
+
+      if (!service) {
+        throw new ServiceNotFoundError(current.serviceId);
+      }
+
+      const range = buildBlockingRange(startsAt, service);
+
+      /* Mandatory, exactly as on every other write in this module: an expired
+         hold still occupies its slot until a statement moves it, because the
+         constraint predicate cannot reference now(). */
+      await clearCollidingExpiredHolds(
+        tx,
+        current.staffId,
+        range.slot,
+        current.id,
+      );
+
+      const [moved] = await tx
+        .update(appointments)
+        .set({
+          slot: range.slot,
+          startsAt: range.startsAt,
+          endsAt: range.endsAt,
+          /* NEWER THAN THE INVITE ALREADY IN THEIR CALENDAR, or the client
+             ignores it and the customer arrives at the old time. */
+          icsSequence: sql`${appointments.icsSequence} + 1`,
+        })
+        .where(
+          and(
+            eq(appointments.id, input.appointmentId),
+            /* The second half of the read above: if anything moved this row
+               between the two statements, zero rows update and the whole
+               transaction rolls back rather than half-moving a booking. */
+            eq(appointments.status, "confirmed"),
+          ),
+        )
+        .returning();
+
+      if (!moved) {
+        return { outcome: "not-movable" as const, status: current.status };
+      }
+
+      return {
+        outcome: "moved" as const,
+        appointment: moved,
+        previous: { startsAt: current.startsAt, endsAt: current.endsAt },
+      };
+    });
+  } catch (error) {
+    if (isExclusionViolation(error)) {
+      /* Somebody took the new time first. The transaction rolled back, so the
+         customer still has the appointment they started with. */
+      return { outcome: "slot-taken" as const };
+    }
+
+    throw error;
+  }
+}
+
+/* ===========================================================================
+   The customer cancels their own appointment
+   =========================================================================== */
+
+export type CancelAppointmentResult =
+  /** Cancelled by this call. The slot is free from the moment it commits. */
+  | { outcome: "cancelled"; appointment: Appointment }
+  /**
+   * ALREADY CANCELLED, and this is the answer a double-click gets.
+   *
+   * Not an error: the customer asked for this appointment to be cancelled and
+   * it is cancelled. The caller treats it as success and — critically — does
+   * NOT refund again.
+   */
+  | { outcome: "already-cancelled"; appointment: Appointment }
+  /** Completed, no-show, or never confirmed. Nothing to cancel. */
+  | { outcome: "not-cancellable"; status: AppointmentStatus | null };
+
+/**
+ * Cancel a confirmed appointment, freeing the slot immediately.
+ *
+ * ═══ IDEMPOTENT BY CONSTRUCTION, BECAUSE MONEY DEPENDS ON IT ═══
+ *
+ * The UPDATE matches `WHERE status = 'confirmed'`. Two concurrent
+ * cancellations — a double-clicked button, a customer on two devices — both
+ * try it; exactly one updates a row and gets `cancelled`, and the other
+ * updates nothing and gets `already-cancelled`. The refund hangs off the FIRST
+ * answer only, so "double-clicking Cancel must not attempt two refunds" is a
+ * property of the statement rather than of a flag somebody has to remember to
+ * check.
+ *
+ * The slot is freed the instant this commits: the exclusion constraint covers
+ * only `held` and `confirmed`, so a cancelled row blocks nothing and the time
+ * is genuinely back in the day with no sweep required.
+ *
+ * `ics_sequence` is incremented for the same reason a move increments it — the
+ * METHOD:CANCEL going out has to outrank the invite already in the calendar.
+ *
+ * NOTHING IS REFUNDED AND NOTHING IS EMAILED HERE. Both are the caller's,
+ * because both are network calls that must not sit inside a transaction.
+ */
+export async function cancelAppointment(
+  db: Db,
+  input: {
+    appointmentId: string;
+    cancelledBy: "customer" | "business";
+    reason: string | null;
+  },
+): Promise<CancelAppointmentResult> {
+  return db.transaction(async (tx) => {
+    const [cancelled] = await tx
+      .update(appointments)
+      .set({
+        status: "cancelled",
+        holdExpiresAt: null,
+        cancelledAt: new Date(),
+        cancelledBy: input.cancelledBy,
+        cancellationReason: input.reason,
+        icsSequence: sql`${appointments.icsSequence} + 1`,
+      })
+      .where(
+        and(
+          eq(appointments.id, input.appointmentId),
+          /* THE GUARD. Exactly one concurrent caller can match this. */
+          eq(appointments.status, "confirmed"),
+        ),
+      )
+      .returning();
+
+    if (cancelled) {
+      return { outcome: "cancelled" as const, appointment: cancelled };
+    }
+
+    /* Nothing updated. Find out whether that is because it was already
+       cancelled — the ordinary double-click — or because it was never
+       cancellable at all. */
+    const [current] = await tx
+      .select()
+      .from(appointments)
+      .where(eq(appointments.id, input.appointmentId))
+      .limit(1);
+
+    if (current?.status === "cancelled") {
+      return { outcome: "already-cancelled" as const, appointment: current };
+    }
+
+    return {
+      outcome: "not-cancellable" as const,
+      status: current?.status ?? null,
+    };
+  });
 }
 
 /**

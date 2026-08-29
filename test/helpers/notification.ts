@@ -74,6 +74,7 @@ export function subjectFor(
       address: "Oranienstrasse 12, 10999 Berlin",
       cancellationWindowHours: 24,
       allowReschedule: true,
+      refundDepositOnCancel: true,
       ...overrides.business,
     },
 

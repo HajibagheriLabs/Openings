@@ -135,6 +135,7 @@ export async function loadNotificationSubject(
       address: row.business.address,
       cancellationWindowHours: row.business.cancellationWindowHours,
       allowReschedule: row.business.allowReschedule,
+      refundDepositOnCancel: row.business.refundDepositOnCancel,
     },
 
     service: {

@@ -43,7 +43,16 @@ export function SlotList({
   selectedStartsAt: string | null;
   /** The offer whose hold is being written right now. */
   pendingStartsAt: string | null;
-  countdown: HoldCountdown;
+  /**
+   * The hold's remaining time, when there IS a hold.
+   *
+   * OPTIONAL, because this list is shared with the reschedule picker on the
+   * manage page — and a customer moving an appointment they already have is
+   * not holding anything. There is nothing to count down, so the bar, the
+   * readout and the "held for you" announcement are all simply absent rather
+   * than showing a timer against nothing.
+   */
+  countdown?: HoldCountdown;
   onSelect: (offer: DayOffer) => void;
   className?: string;
 }) {
@@ -71,7 +80,7 @@ export function SlotList({
                   pending && "opacity-70",
                 )}
               >
-                {selected ? (
+                {selected && countdown ? (
                   /* The same depleting bar the strip draws, on the same
                      fraction of the same hold. */
                   <span
@@ -109,16 +118,20 @@ export function SlotList({
                   />
                 ) : selected ? (
                   <span className="flex shrink-0 items-center gap-2">
-                    <span className="type-time tabular">
-                      {formatCountdown(countdown.secondsRemaining)}
-                    </span>
+                    {countdown ? (
+                      <span className="type-time tabular">
+                        {formatCountdown(countdown.secondsRemaining)}
+                      </span>
+                    ) : null}
                     <Check aria-hidden="true" className="size-4" />
                   </span>
                 ) : null}
 
                 {selected ? (
                   <span className="sr-only">
-                    Held for you, {countdown.secondsRemaining} seconds left
+                    {countdown
+                      ? `Held for you, ${countdown.secondsRemaining} seconds left`
+                      : "Selected"}
                   </span>
                 ) : null}
               </button>

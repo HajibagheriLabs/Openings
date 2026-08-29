@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import BookingCancellation from "../../../emails/booking/cancellation";
 import BookingConfirmation from "../../../emails/booking/confirmation";
 import NewBooking from "../../../emails/booking/new-booking";
+import OwnerCancellation from "../../../emails/booking/owner-cancellation";
+import OwnerReschedule from "../../../emails/booking/owner-reschedule";
 import RefundNotice from "../../../emails/booking/refund";
 import BookingReminder from "../../../emails/booking/reminder";
 import BookingReschedule from "../../../emails/booking/reschedule";
@@ -55,6 +57,8 @@ import { visitorZoneFor, type EmailBooking } from "./view";
  *   slot_lost     none     there is nothing to put in a calendar. There never
  *                          was: the appointment was never confirmed.
  *   refund        none     money moved; the diary did not.
+ *   owner_*       none     same reason as new_booking — the admin agenda is
+ *                          the owner's calendar of record.
  */
 
 /* ===========================================================================
@@ -108,6 +112,8 @@ export interface NotificationSubject {
     address: string | null;
     cancellationWindowHours: number;
     allowReschedule: boolean;
+    /** Whether an in-time cancellation puts the deposit back. */
+    refundDepositOnCancel: boolean;
   };
 
   service: { id: string; name: string; durationMin: number };
@@ -187,7 +193,7 @@ export function bookingViewOf(subject: NotificationSubject): EmailBooking {
       depositCents: subject.appointment.depositCents,
     }),
 
-    manageUrl: manageUrl(subject.origin, subject.appointment.id, token),
+    manageUrl: manageUrl(subject.origin, token),
     icsUrl: icsUrl(subject.origin, subject.appointment.id, token),
     googleUrl: googleCalendarUrl({
       title: `${subject.service.name} — ${subject.business.name}`,
@@ -218,11 +224,7 @@ function inviteDescription(subject: NotificationSubject): string {
   const lines = [
     `${subject.service.name} with ${subject.staff.name} at ${subject.business.name}.`,
     "",
-    `Change or cancel: ${manageUrl(
-      subject.origin,
-      subject.appointment.id,
-      subject.manageToken,
-    )}`,
+    `Change or cancel: ${manageUrl(subject.origin, subject.manageToken)}`,
   ];
 
   if (subject.business.contactPhone) {
@@ -252,7 +254,7 @@ export function inviteFor(
       email: subject.business.contactEmail,
     },
     attendee: { name: subject.customer.name, email: subject.customer.email },
-    url: manageUrl(subject.origin, subject.appointment.id, subject.manageToken),
+    url: manageUrl(subject.origin, subject.manageToken),
   });
 }
 
@@ -435,6 +437,51 @@ export async function composeNotification(
 
       return {
         subject: `New booking: ${subject.customer.name}, ${when}`,
+        html,
+        text,
+        calendar: null,
+      };
+    }
+
+    case "owner_reschedule": {
+      const moved = payloadOf(subject, "reschedule");
+
+      /* Without the payload there is no "was" to print, so the message falls
+         back to stating the new time — the half that matters. */
+      const previous = moved
+        ? {
+            startsAt: moved.previousStartsAt,
+            endsAt: moved.previousEndsAt,
+            timeZone: subject.business.timeZone,
+            /* The OWNER's copy, so never a second zone: the business's clock
+               is the only one they think in. */
+            visitorTimeZone: null,
+          }
+        : booking.times;
+
+      const { html, text } = await renderBoth(
+        OwnerReschedule({ booking, previous, agendaUrl }),
+      );
+
+      return {
+        subject: `Moved: ${subject.customer.name}, now ${when}`,
+        html,
+        text,
+        calendar: null,
+      };
+    }
+
+    case "owner_cancellation": {
+      const { html, text } = await renderBoth(
+        OwnerCancellation({
+          booking,
+          refundedCents: subject.appointment.refundedCents,
+          agendaUrl,
+        }),
+      );
+
+      return {
+        subject: `Cancelled: ${subject.customer.name}, ${when}`,
         html,
         text,
         calendar: null,
