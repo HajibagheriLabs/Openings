@@ -177,6 +177,17 @@ jobs:
         if: failure()
         run: cat "$(npm config get cache)/_logs/"*.log || true
 
+      # The browser suite builds the application before it starts it, and a
+      # cold Next build is most of this job. The cache turns a later run's
+      # build into an incremental one; a miss simply costs what today costs.
+      - name: Cache the Next build
+        uses: actions/cache@v4
+        with:
+          path: .next/cache
+          key: next-${{ hashFiles('package-lock.json') }}-${{ github.sha }}
+          restore-keys: |
+            next-${{ hashFiles('package-lock.json') }}-
+
       - name: Create the browser suite's database
         run: psql "$DATABASE_URL" -c 'CREATE DATABASE openings_e2e'
 

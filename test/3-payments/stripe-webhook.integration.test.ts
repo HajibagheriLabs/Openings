@@ -107,6 +107,23 @@ beforeAll(async () => {
   process.env.DATABASE_URL = requireTestDatabaseUrl();
   process.env.STRIPE_WEBHOOK_SECRET = WEBHOOK_SECRET;
 
+  /**
+   * PIN THE DELIVERY ENVIRONMENT, or this file asserts different things on
+   * different machines.
+   *
+   * After the transaction commits, the route dispatches what it queued. With a
+   * delivery service configured that PUBLISHES the messages and the rows stay
+   * `pending`; without one it SENDS the due ones immediately and they become
+   * `sent`. Both are correct, and the test helper loads .env.local — so a
+   * developer with QStash configured saw one outcome and CI saw the other, and
+   * the suite failed on a machine rather than on a change.
+   *
+   * Blanked, not set: no token means no network, and the mailer's console
+   * fallback means no mail. What is left is the behaviour this file is about.
+   */
+  process.env.QSTASH_TOKEN = "";
+  process.env.RESEND_API_KEY = "";
+
   ({ POST } = await import("@/app/api/webhooks/stripe/route"));
 
   await db.execute(sql`
@@ -413,9 +430,21 @@ describe("checkout.session.completed", () => {
       "new_booking",
       "reminder",
     ]);
-    /* Written, never sent. A worker delivers them. */
-    expect(queued.every((row) => row.status === "pending")).toBe(true);
-    expect(queued.every((row) => row.sentAt === null)).toBe(true);
+    /**
+     * WRITTEN BY THE TRANSACTION, moved by a worker — and the reminder proves
+     * the second half.
+     *
+     * The confirmation and the owner's copy are due now, so the dispatch that
+     * follows the commit takes them. The reminder is due the day before the
+     * appointment, so it is still sitting in the outbox waiting for its
+     * moment. Nothing failed, which is the assertion that would catch a
+     * message queued against a row it cannot be composed from.
+     */
+    const byKind = new Map(queued.map((row) => [row.kind, row]));
+
+    expect(byKind.get("reminder")?.status).toBe("pending");
+    expect(byKind.get("reminder")?.sentAt).toBeNull();
+    expect(queued.some((row) => row.status === "failed")).toBe(false);
   });
 
   it("queues no reminder for a booking made inside the reminder window", async () => {

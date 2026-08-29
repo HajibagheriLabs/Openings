@@ -68,10 +68,19 @@ export default defineConfig({
   webServer: {
     command: `npm run build && npx next start --port ${PORT}`,
     url: BASE_URL,
-    /* A cold Next build. Generous on purpose: a build that takes 100 seconds
-       is slow, not broken, and a flaky timeout here would be blamed on the
-       application. */
-    timeout: 300_000,
+    /**
+     * A COLD NEXT BUILD ON A TWO-CORE RUNNER, and the number is set by that
+     * rather than by what a developer's laptop does.
+     *
+     * Five minutes was not enough in CI and the suite reported a webServer
+     * timeout — which reads as "the application would not start" and is
+     * nothing of the kind. A build that fails still fails fast, because `&&`
+     * short-circuits and Playwright reports a process that exited rather than
+     * one that never answered. So the only thing a generous number costs is
+     * patience on a run that was going to be slow anyway; the job's own
+     * timeout is the real bound.
+     */
+    timeout: 900_000,
     reuseExistingServer: !process.env.CI,
     stdout: "pipe",
     stderr: "pipe",
