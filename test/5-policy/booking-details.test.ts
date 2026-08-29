@@ -6,7 +6,10 @@ import {
   describeDepositPolicy,
   describeReschedule,
 } from "@/lib/booking/policy";
-import { bookingDetailsSchema } from "@/lib/validation/booking-details";
+import {
+  bookingDetailsSchema,
+  HONEYPOT_FIELD,
+} from "@/lib/validation/booking-details";
 
 /**
  * The form's contract and the policy's words.
@@ -24,6 +27,45 @@ const valid = {
   note: "",
   policyAccepted: true as const,
 };
+
+describe("the honeypot", () => {
+  /**
+   * ═══ THE SCHEMA MUST *ACCEPT* A FILLED HONEYPOT ═══
+   *
+   * This reads backwards until you see what the alternative does. If the
+   * schema refused it, the submit would come back as an ordinary validation
+   * failure NAMING THE FIELD — and a trap that tells the caller which field
+   * gave them away is a trap with a one-line fix.
+   *
+   * So parsing succeeds and the server refuses afterwards, with the same
+   * message a rate-limited human gets. This test exists to stop somebody
+   * "tidying up" the schema by adding the `.max(0)` that looks missing.
+   */
+  it("PARSES A FILLED HONEYPOT INSTEAD OF NAMING IT IN AN ERROR", () => {
+    const result = bookingDetailsSchema.safeParse({
+      ...valid,
+      [HONEYPOT_FIELD]: "Acme Ltd",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.company).toBe("Acme Ltd");
+
+    /* And nothing anywhere in the issues may mention the field, on any input. */
+    const rejected = bookingDetailsSchema.safeParse({
+      ...valid,
+      name: "",
+      [HONEYPOT_FIELD]: "Acme Ltd",
+    });
+
+    expect(
+      rejected.error?.issues.some((issue) => issue.path[0] === HONEYPOT_FIELD),
+    ).toBe(false);
+  });
+
+  it("defaults to empty, so an untouched form always passes the server's check", () => {
+    expect(bookingDetailsSchema.parse(valid).company).toBe("");
+  });
+});
 
 describe("bookingDetailsSchema", () => {
   it("accepts the minimum a booking actually needs", () => {

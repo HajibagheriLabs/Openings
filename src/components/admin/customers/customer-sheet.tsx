@@ -1,8 +1,11 @@
 "use client";
 
-import { Mail, Phone } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Mail, Phone, UserX } from "lucide-react";
+import { useEffect, useState, useTransition } from "react";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PillButton } from "@/components/pill-button";
 import { Sheet } from "@/components/sheet";
 import { SkeletonText } from "@/components/skeleton";
 import { AppointmentStatusBadge } from "@/components/status-badge";
@@ -11,7 +14,7 @@ import {
   formatInstantRange,
 } from "@/components/time-text";
 import { formatCents } from "@/lib/money";
-import { readCustomerHistory } from "@/server/actions/customers";
+import { forgetCustomer, readCustomerHistory } from "@/server/actions/customers";
 import type { CustomerRow, CustomerVisit } from "@/server/queries/customers";
 
 /**
@@ -75,6 +78,35 @@ export function CustomerSheet({
       cancelled = true;
     };
   }, [customer, open]);
+
+  /* ---------------------------------------------------------------------
+     Erasure
+  --------------------------------------------------------------------- */
+
+  const [confirming, setConfirming] = useState(false);
+  const [forgetting, startForgetting] = useTransition();
+
+  function forget() {
+    if (!customer) {
+      return;
+    }
+
+    startForgetting(async () => {
+      const result = await forgetCustomer(customer.id);
+
+      /* Reported either way. A silent erasure is one nobody can be sure ran,
+         and this is the one action in the admin area that cannot be undone. */
+      if (result.ok) {
+        toast.success(result.message);
+        setConfirming(false);
+        /* The row this sheet is about no longer describes anybody. Closing is
+           the honest outcome; the list behind it has already revalidated. */
+        onOpenChange(false);
+      } else {
+        toast.error(result.message);
+      }
+    });
+  }
 
   return (
     <Sheet
@@ -170,6 +202,48 @@ export function CustomerSheet({
                 ))}
               </ul>
             )}
+          </section>
+
+          {/* ═══ ERASURE, WHERE THE PERSON IS ═══
+
+              The request arrives as "please delete my data", so the control
+              belongs on the customer, not buried in a settings page. It sits
+              at the bottom, behind a confirmation, described in terms of what
+              actually happens rather than in the word "delete" — because the
+              appointments do not go, and an owner who expected them to would
+              be badly surprised. See `forgetCustomer`. */}
+          <section className="flex flex-col gap-3 border-t border-line pt-5">
+            <h3 className="type-label">Data requests</h3>
+
+            <p className="type-body-sm text-ink-muted">
+              If {customer.name} asks to be forgotten, this removes their name,
+              email, phone number and every note about them. Their appointments
+              stay in your diary, with nothing left that says whose they were —
+              so your figures and any payment records still add up.
+            </p>
+
+            <ConfirmDialog
+              open={confirming}
+              onOpenChange={setConfirming}
+              title={`Forget ${customer.name}?`}
+              description="Their name, email, phone number, the note they left and any note you kept about them are removed for good. This cannot be undone."
+              confirmLabel={forgetting ? "Forgetting" : "Forget them"}
+              cancelLabel="Keep their details"
+              destructive
+              onConfirm={forget}
+              trigger={
+                <PillButton variant="destructive" size="sm" className="w-fit">
+                  <UserX aria-hidden="true" />
+                  Forget this customer
+                </PillButton>
+              }
+            >
+              <p className="type-body-sm text-ink-muted">
+                Their appointments stay in the diary so your records and any
+                payments still reconcile. They will show as “Forgotten
+                customer”.
+              </p>
+            </ConfirmDialog>
           </section>
         </div>
       )}

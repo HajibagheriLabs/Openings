@@ -2,7 +2,8 @@ import "server-only";
 
 import { Client } from "@upstash/qstash";
 
-import { clientEnv, serverEnv } from "@/env";
+import { clientEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -198,10 +199,15 @@ class QStashScheduler implements Scheduler {
         return true;
       }
 
+      /* THE MESSAGE, NOT THE ERROR OBJECT. An SDK error can carry the request
+         that produced it, and that request carries `Authorization: Bearer
+         <QSTASH_TOKEN>`. Logging the object would put a live credential into
+         whatever collects these. `messageOf` takes the sentence and nothing
+         else. */
       console.error(
-        `[scheduler] could not cancel scheduled message ${messageId}. ` +
-          `The delivery route will refuse it on arrival if the appointment has moved.`,
-        error,
+        `[scheduler] could not cancel scheduled message ${messageId}: ` +
+          `${messageOf(error)}. The delivery route will refuse it on arrival ` +
+          `if the appointment has moved.`,
       );
 
       return false;

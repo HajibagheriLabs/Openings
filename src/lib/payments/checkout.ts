@@ -44,6 +44,51 @@ import { formatCents } from "@/lib/money";
 export const OWNER_TAG = "openings" as const;
 
 /** Metadata keys, in one place so the writer and the webhook cannot drift. */
+/**
+ * The idempotency key for a refund.
+ *
+ * ═══ WHY A REFUND NEEDS ONE AND A CHARGE DOES NOT ═══
+ *
+ * The SDK attaches its own key to a request it RETRIES internally, which
+ * covers a socket dying mid-call. It does not cover this application deciding
+ * to run the same logical operation twice, and there are two ways that
+ * happens here, both real:
+ *
+ *   1. THE WEBHOOK RETRY. `handleStripeEvent` deletes its idempotency guard
+ *      when handling throws, so Stripe's redelivery is processed rather than
+ *      swallowed — which is correct, and which means a refund that SUCCEEDED
+ *      before a later step threw would be issued a second time on the retry.
+ *   2. A DOUBLE CANCEL. Cancelling is a Server Action — from the customer's
+ *      manage page and from the owner's agenda. Two clicks, or a client
+ *      retrying a request whose response was lost, can reach the refund twice.
+ *
+ * Keyed on the appointment and the REASON, so the THREE refund paths in this
+ * codebase cannot collide with each other while each stays idempotent on its
+ * own. Stripe remembers a key for 24 hours, which is far longer than any of
+ * those retry windows.
+ *
+ * NOT keyed on an amount or a timestamp: both would change between attempts at
+ * the same logical refund, which is exactly the bug the key exists to stop.
+ */
+export function refundIdempotencyKey(
+  appointmentId: string,
+  reason: RefundReason,
+): string {
+  return `refund:${appointmentId}:${reason}`;
+}
+
+/**
+ * Why a refund was issued. Written to the refund's metadata AND into its
+ * idempotency key, so a dashboard and a retry agree about which one it is.
+ */
+export type RefundReason =
+  /** The hold lapsed and the slot was gone by the time the money landed. */
+  | "slot_taken_before_payment_landed"
+  /** The customer cancelled inside the window the business refunds in. */
+  | "cancelled_by_customer_within_policy"
+  /** The business cancelled the appointment from the admin agenda. */
+  | "cancelled_by_business";
+
 export const CHECKOUT_METADATA = {
   /** Always `OWNER_TAG`. See above. */
   app: "app",

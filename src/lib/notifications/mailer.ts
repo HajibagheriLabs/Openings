@@ -2,7 +2,7 @@ import "server-only";
 
 import { Resend } from "resend";
 
-import { serverEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 
 /**
  * The mailer boundary.
@@ -57,11 +57,39 @@ export interface Mailer {
  * Prints the message instead of sending it. The text part is logged rather
  * than the HTML because it is the readable one, and any verification or reset
  * link appears in it verbatim, ready to paste into a browser.
+ *
+ * ═══ AND THAT IS EXACTLY WHY IT IS MUTED IN PRODUCTION ═══
+ *
+ * Almost every message this application sends carries a live credential in its
+ * body: a manage token, a password-reset link, an email-verification link. In
+ * development, printing them is the entire point — it is what lets somebody
+ * clone this repository and complete a booking, a sign-up and a password reset
+ * with no email provider configured.
+ *
+ * In production the same behaviour writes those credentials into the hosting
+ * platform's log stream, where they are retained, searchable, and readable by
+ * anybody with dashboard access. A booking confirmation sitting in a log is a
+ * link that cancels somebody's appointment.
+ *
+ * So the fallback still exists in production — a missing key must never crash
+ * the app mid-booking — but it prints THE ENVELOPE ONLY, plus a loud line
+ * saying mail is not being delivered. Nothing in it would work if pasted into
+ * a browser.
  */
 class ConsoleMailer implements Mailer {
   readonly name = "console";
 
   async send(email: OutboundEmail): Promise<void> {
+    if (serverEnv.NODE_ENV === "production") {
+      console.error(
+        `[mailer] NOT SENT — RESEND_API_KEY is not set. "${email.subject}" ` +
+          `for ${email.to} was dropped. The body is deliberately not logged: ` +
+          "it contains a live link. Set RESEND_API_KEY.",
+      );
+
+      return;
+    }
+
     console.info(
       [
         "",

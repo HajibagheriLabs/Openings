@@ -159,20 +159,28 @@ describe("the manage token", () => {
       "definitely-not-a-real-manage-token-at-all",
     );
 
-    expect(resolved.status).toBe("unknown");
+    expect(resolved.status).toBe("dead");
   });
 
   it("refuses a token that is the wrong shape without touching the database", async () => {
-    expect((await resolveManageToken(db, "")).status).toBe("unknown");
-    expect((await resolveManageToken(db, "short")).status).toBe("unknown");
+    expect((await resolveManageToken(db, "")).status).toBe("dead");
+    expect((await resolveManageToken(db, "short")).status).toBe("dead");
   });
 
   /**
    * EXPIRY IS DERIVED FROM `ends_at`, so an appointment far enough in the past
-   * has a dead link — and the answer still names the business, because the row
-   * is there and we know exactly who they booked with.
+   * has a dead link.
+   *
+   * ═══ AND IT IS INDISTINGUISHABLE FROM A TOKEN THAT NEVER EXISTED ═══
+   *
+   * This used to assert the opposite — that an expired link still named the
+   * business, on the reasoning that a real customer deserves a phone number.
+   * The assertion is inverted deliberately: two different answers make this
+   * endpoint an oracle for "is this token real?", and an expired manage URL
+   * outlives the appointment in inboxes and screenshots, so naming the shop
+   * leaks who somebody booked with to anyone who later holds the link.
    */
-  it("expires a set time after the appointment, and still names the business", async () => {
+  it("gives an expired link the same answer as a token that names nothing", async () => {
     const booking = await book(startsInDays(5));
 
     /* Push the appointment ninety days into the past. */
@@ -184,17 +192,15 @@ describe("the manage token", () => {
       })
       .where(eq(appointments.id, booking.id));
 
-    const resolved = await resolveManageToken(db, booking.token);
+    const expired = await resolveManageToken(db, booking.token);
+    const nonsense = await resolveManageToken(db, "a".repeat(43));
 
-    expect(resolved.status).toBe("expired");
+    expect(expired.status).toBe("dead");
+    expect(nonsense.status).toBe("dead");
 
-    if (resolved.status !== "expired") {
-      return;
-    }
-
-    expect(resolved.contact.name).toBe("Test Clinic");
-    expect(resolved.contact.email).toBe("hello@example.test");
-    expect(resolved.contact.bookingPath).toContain("/book/test-clinic");
+    /* The whole resolution, not just its tag: nothing may differ between the
+       two, or the difference is the oracle. */
+    expect(expired).toEqual(nonsense);
   });
 
   it("still opens a link for an appointment that has merely passed", async () => {
@@ -232,7 +238,7 @@ describe("the manage token", () => {
 
     /* A hold has never been emailed to anybody and a link to one should not
        exist. It resolves as unknown rather than as an appointment. */
-    expect((await resolveManageToken(db, held.manageToken)).status).toBe("unknown");
+    expect((await resolveManageToken(db, held.manageToken)).status).toBe("dead");
   });
 });
 

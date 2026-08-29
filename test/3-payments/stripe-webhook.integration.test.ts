@@ -56,7 +56,7 @@ import {
  */
 
 const WEBHOOK_SECRET = "whsec_openings_suite_secret";
-const API_VERSION = "2026-07-29.dahlia" as const;
+const API_VERSION = "2026-08-26.dahlia" as const;
 
 /** The one Stripe call the webhook makes. Hoisted so `vi.mock` can close over it. */
 const stripeApi = vi.hoisted(() => ({

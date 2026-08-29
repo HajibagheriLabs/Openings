@@ -2,7 +2,8 @@ import "server-only";
 
 import { createHmac } from "node:crypto";
 
-import { clientEnv, serverEnv } from "@/env";
+import { clientEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 
 /**
  * The customer's proof that an appointment is theirs — and how a background

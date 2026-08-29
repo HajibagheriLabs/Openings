@@ -4,7 +4,8 @@ import { timingSafeEqual } from "node:crypto";
 
 import { Receiver } from "@upstash/qstash";
 
-import { clientEnv, serverEnv } from "@/env";
+import { clientEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 
 /**
  * Who is allowed to make this application do scheduled work.

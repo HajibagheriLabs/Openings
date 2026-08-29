@@ -21,6 +21,7 @@ import {
 import type { OfferedTime } from "@/lib/notifications/payload";
 import {
   CHECKOUT_METADATA,
+  refundIdempotencyKey,
   isOwnObject,
   OWNER_TAG,
 } from "@/lib/payments/checkout";
@@ -298,6 +299,9 @@ async function onCheckoutCompleted(
  *   4. Log it, because a business owner should be able to find out this
  *      happened without being told by the customer.
  */
+/** This path's one reason, used in the metadata and in the idempotency key. */
+const REFUND_REASON = "slot_taken_before_payment_landed" as const;
+
 async function refundAndApologise(
   appointment: Appointment,
   paymentIntentId: string | null,
@@ -310,18 +314,42 @@ async function refundAndApologise(
 
   if (stripe && paymentIntentId) {
     try {
-      const refund = await stripe.refunds.create({
-        payment_intent: paymentIntentId,
-        /* Tagged like everything else, and with a reason a human scanning the
-           dashboard can act on without opening the application. */
-        metadata: {
-          [CHECKOUT_METADATA.app]: OWNER_TAG,
-          [CHECKOUT_METADATA.appointmentId]: appointment.id,
-          reason: "slot_taken_before_payment_landed",
+      const refund = await stripe.refunds.create(
+        {
+          payment_intent: paymentIntentId,
+          /* Tagged like everything else, and with a reason a human scanning
+             the dashboard can act on without opening the application. */
+          metadata: {
+            [CHECKOUT_METADATA.app]: OWNER_TAG,
+            [CHECKOUT_METADATA.appointmentId]: appointment.id,
+            reason: REFUND_REASON,
+          },
         },
-      });
+        {
+          /**
+           * THE ONE THING STANDING BETWEEN A RETRY AND A DOUBLE REFUND.
+           *
+           * When handling throws, the guard row for this event is deleted and
+           * Stripe redelivers — deliberately, so a paid booking is never left
+           * unconfirmed. That means everything in this function can run twice,
+           * including this call. With the key, the second attempt returns the
+           * FIRST refund instead of creating another one. See
+           * `refundIdempotencyKey`.
+           */
+          idempotencyKey: refundIdempotencyKey(appointment.id, REFUND_REASON),
+        },
+      );
 
       refundedCents = refund.amount;
+
+      /* Logged on the way through, not only on failure: a refund this
+         application issued by itself, without anybody asking, is exactly the
+         event an owner should be able to find in a log afterwards. */
+      console.info(
+        `[stripe] refunded ${refund.amount} to appointment ${appointment.id} ` +
+          `(refund ${refund.id}, payment intent ${paymentIntentId}, ` +
+          `reason ${REFUND_REASON})`,
+      );
     } catch (error) {
       /**
        * The refund failed and the customer is out of pocket.

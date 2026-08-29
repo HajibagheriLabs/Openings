@@ -44,28 +44,45 @@ import { hashManageToken } from "@/lib/scheduling/booking";
  * would be a second copy of a fact `ends_at` already carries, and the two would
  * drift the first time an appointment moved.
  *
- * ═══ NEVER A BARE 404 ═══
+ * ═══ ONE ANSWER FOR EVERY LINK THAT DOES NOT WORK ═══
  *
- * Every failure below resolves to a `ManageResolution` with something to say.
- * An expired link names the business and its phone number, because the row is
- * still there and we know exactly who they booked with. A token that matches
- * nothing genuinely cannot name a business — that is not evasiveness, it is the
- * truth, and the copy says what to do instead. A 404 would answer neither.
+ * A token that matches nothing and a token whose appointment is long over
+ * resolve to the SAME `dead` result, with the same copy, and neither names a
+ * business.
+ *
+ * This used to be two outcomes. The expired one named the shop, printed its
+ * phone number and said when the link lapsed, on the reasoning that a real
+ * customer with a stale link deserves a way to reach somebody. That reasoning
+ * was wrong twice over:
+ *
+ *   1. IT IS AN ORACLE. Two different answers tell whoever is asking whether a
+ *      token names a real appointment. Against a 256-bit HMAC that is not a
+ *      practical search — but a limiter that fails open, a log that records
+ *      URLs, and a link forwarded in a screenshot are all real, and none of
+ *      them should be able to confirm anything.
+ *   2. IT LEAKS AFTER THE FACT. A manage URL outlives the appointment: in an
+ *      inbox, in a browser history, in a screenshot in a group chat. Anybody
+ *      who later holds that URL learned who the customer booked with, from a
+ *      link that was supposed to have stopped working.
+ *
+ * The customer keeps the way out that always worked and never depended on this
+ * page: the email the link came from names the business on every line of it.
+ *
+ * STILL NEVER A BARE 404. The page says what happened and what to do; it just
+ * says the same thing to everybody.
  */
 
 export type ManageResolution =
   | { status: "ok"; view: ManageView }
   /**
-   * The row is there and the token matched, but the link is past its life.
-   * We know the business, so the page can hand over their details.
+   * The link does not work, and that is all anybody is told.
+   *
+   * A mistyped token, a forged one, a link from another deployment, and a
+   * genuine link whose appointment finished a month ago all arrive here and
+   * are indistinguishable from outside. See the note above for why the two
+   * cases were merged.
    */
-  | { status: "expired"; expiredAt: Date; contact: BusinessContact }
-  /**
-   * Nothing matched. A mistyped link, a forged one, or a link from another
-   * deployment. There is no business to name, and pretending otherwise would
-   * be inventing one.
-   */
-  | { status: "unknown" };
+  | { status: "dead" };
 
 export interface BusinessContact {
   name: string;
@@ -122,7 +139,7 @@ export async function resolveManageToken(
   if (!token || token.length < 16 || token.length > 256) {
     /* Cheap shape check before touching the database. Every token this product
        mints is a 43-character base64url HMAC. */
-    return { status: "unknown" };
+    return { status: "dead" };
   }
 
   const [row] = await db
@@ -132,7 +149,7 @@ export async function resolveManageToken(
     .limit(1);
 
   if (!row || row.status === "held") {
-    return { status: "unknown" };
+    return { status: "dead" };
   }
 
   const subject = await loadNotificationSubject(db, row.id, {
@@ -145,17 +162,16 @@ export async function resolveManageToken(
     /* An appointment with no customer attached. Not reachable for a confirmed
        booking — the CHECK constraint forbids it — and not something to guess
        at if it ever were. */
-    return { status: "unknown" };
+    return { status: "dead" };
   }
 
-  const contact = contactOf(subject);
-  const expiresAt = manageTokenExpiresAt(row.endsAt);
-
-  if (now.getTime() >= expiresAt.getTime()) {
-    return { status: "expired", expiredAt: expiresAt, contact };
+  if (now.getTime() >= manageTokenExpiresAt(row.endsAt).getTime()) {
+    /* Past its life. Same answer as a token that never named anything — see
+       the note at the top of this file. */
+    return { status: "dead" };
   }
 
-  return { status: "ok", view: buildView(row, subject, contact, now) };
+  return { status: "ok", view: buildView(row, subject, contactOf(subject), now) };
 }
 
 function contactOf(subject: NotificationSubject): BusinessContact {

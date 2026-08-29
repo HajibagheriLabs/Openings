@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import { z } from "zod";
 
 import { db } from "@/db";
@@ -29,6 +30,14 @@ import {
   toSnapshot,
   type PickerContext,
 } from "@/server/booking/picker";
+import {
+  clientAddressOf,
+  consumeRateLimit,
+  HOLD_CREATE_DAY_RULE,
+  HOLD_CREATE_IP_RULE,
+  HOLD_REQUEST_IP_RULE,
+  rateLimitKey,
+} from "@/server/booking/rate-limit";
 
 /**
  * The three things the time picker can ask the server to do.
@@ -71,6 +80,24 @@ export type PickerRequest = z.infer<typeof requestSchema>;
 /** The generic failure. Never leaks an exception message to a customer. */
 const brokeMessage =
   "We could not reach the calendar just now. Try that again in a moment.";
+
+/**
+ * What somebody who has been rate-limited is told.
+ *
+ * Deliberately not "you have been blocked". The overwhelming majority of the
+ * people who ever see this are behind a shared address at an office or on a
+ * phone network, and the true statement — a lot of requests came from where
+ * you are, wait a moment — is both more accurate and less alarming than an
+ * accusation.
+ */
+const busyMessage =
+  "A lot of booking requests have come from your network just now. Wait a " +
+  "minute and try again — nothing has been lost.";
+
+/** This caller's address, for the limiter. See `clientAddressOf`. */
+async function callerAddress(): Promise<string> {
+  return clientAddressOf({ headers: await headers() });
+}
 
 /**
  * Load the day and, if the cookie points at a live one, the customer's hold.
@@ -137,6 +164,25 @@ export async function takeSlot(
     return { ok: false, reason: "error", message: brokeMessage };
   }
 
+  const address = await callerAddress();
+
+  /**
+   * HOW FAST MAY THIS ADDRESS ASK? Counted on every call, moves included.
+   *
+   * Deliberately before the day is loaded: refusing after the work is done
+   * would mean an attacker still gets the expensive availability computation
+   * for free, which is most of what this endpoint costs.
+   */
+  const asking = await consumeRateLimit(
+    db,
+    rateLimitKey("hold:request:ip", address),
+    HOLD_REQUEST_IP_RULE,
+  );
+
+  if (!asking.allowed) {
+    return { ok: false, reason: "error", message: busyMessage };
+  }
+
   const before = await snapshotFor(context, request.date);
 
   if (!before) {
@@ -193,14 +239,60 @@ export async function takeSlot(
     customerId: null,
   };
 
-  try {
-    /* The COOKIE, not the live hold: if the previous one lapsed while the
-       customer was deciding, its row is still sitting there and the move
-       should clear it rather than leave it for the janitor. `moveHold` treats
-       a missing or lapsed previous hold as nothing to release, so this is safe
-       either way. */
-    const previous = await ownedAppointment(context.slug);
+  /* The COOKIE, not the live hold: if the previous one lapsed while the
+     customer was deciding, its row is still sitting there and the move
+     should clear it rather than leave it for the janitor. `moveHold` treats
+     a missing or lapsed previous hold as nothing to release, so this is safe
+     either way. */
+  const previous = await ownedAppointment(context.slug);
 
+  /**
+   * ═══ THE CONCURRENCY CAP ═══
+   *
+   * Only when this would CREATE a hold. A visitor who already has one is
+   * moving it, `moveHold` releases the old row in the same transaction, and
+   * the number of slots they are sitting on does not change — so nothing is
+   * consumed and somebody comparing times all afternoon is never stopped.
+   *
+   * Two buckets, and the second is the one that matters. The global one bounds
+   * how many slots an address may hold anywhere; the per-day one bounds how
+   * many it may hold on ONE business's ONE day, which is the shape of the only
+   * attack here worth the name — making a Saturday look full. See the note on
+   * the rules for why the window is the hold length.
+   */
+  if (!previous) {
+    const [overall, onThisDay] = await Promise.all([
+      consumeRateLimit(
+        db,
+        rateLimitKey("hold:create:ip", address),
+        HOLD_CREATE_IP_RULE,
+      ),
+      consumeRateLimit(
+        db,
+        rateLimitKey(
+          "hold:create:day",
+          `${address}|${context.businessId}|${request.date}`,
+        ),
+        HOLD_CREATE_DAY_RULE,
+      ),
+    ]);
+
+    if (!overall.allowed || !onThisDay.allowed) {
+      /* `gone` rather than `error`, because the picker draws a refusal with
+         the day beside it and this is a refusal about availability from where
+         the visitor is standing. They are told plainly and handed the same
+         fresh day every other outcome carries. */
+      return {
+        ok: false,
+        reason: "gone",
+        message: busyMessage,
+        snapshot: before.snapshot,
+        nearest: [],
+      };
+    }
+  }
+
+  try {
     const held = previous
       ? await moveHold(db, holdInput, {
           appointmentId: previous.appointmentId,

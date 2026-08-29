@@ -2,7 +2,7 @@ import "server-only";
 
 import Stripe from "stripe";
 
-import { serverEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 
 /**
  * The payments boundary — the only module that constructs a Stripe client.
@@ -28,7 +28,7 @@ import { serverEnv } from "@/env";
  * read, rather than a `npm update` that silently moves the shape of every
  * object this app parses.
  */
-export const STRIPE_API_VERSION = "2026-07-29.dahlia" as const;
+export const STRIPE_API_VERSION = "2026-08-26.dahlia" as const;
 
 /** One client per process. The SDK keeps a keep-alive agent behind it. */
 const globalForStripe = globalThis as unknown as { __openingsStripe?: Stripe };

@@ -61,12 +61,26 @@ export function bookingFooter(businessName: string): ReactNode {
   );
 }
 
-/** The owner's version. Their own business, their own booking page. */
+/**
+ * The owner's version. Their own business, their own booking page.
+ *
+ * ═══ IT NO LONGER PROMISES A SETTING THAT DOES NOT EXIST ═══
+ *
+ * This used to end "Change where these go in your settings." There is no such
+ * control: /admin/settings sets WHEN a reminder goes out, not where owner mail
+ * is addressed, and the address is the account's own. A footer pointing at an
+ * imaginary preference is the kind of small dishonesty that makes everything
+ * around it less believable — and it is the exact line somebody reads when
+ * they want the mail to stop.
+ *
+ * What it says now is true: these are operational notices about their own
+ * bookings, and they arrive at the address the account signs in with.
+ */
 export function ownerFooter(businessName: string): ReactNode {
   return (
     <>
-      You are receiving this because you manage {businessName}. Change where
-      these go in your settings.
+      You are receiving this at your account address because you manage{" "}
+      {businessName}. These are notices about your own bookings, not marketing.
     </>
   );
 }

@@ -134,8 +134,9 @@ Customers never have an account. Every booking email links to `/manage/<token>`,
 bearer credential and the whole of the authorization — only its SHA-256 is stored, and the route finds
 the appointment by hashing what it is given. Links expire 60 days after the appointment ends, derived
 from `ends_at` rather than stored, so a rescheduled booking cannot keep a stale expiry. **An invalid
-or expired link is never a bare 404**: an expired one names the business and its contact details, and
-an unknown one explains what probably went wrong.
+link is never a bare 404 — and it is never distinguishable from an expired one.** Mistyped, forged and
+long-past all get one page that names no business: two different answers would confirm whether a token
+is real, and an expired manage URL outlives the appointment in inboxes and screenshots.
 
 From that page a customer can **move** or **cancel**, when the policy allows. Both share one window —
 the notice the business asks for — because otherwise the cancellation policy is walked around by
@@ -145,7 +146,9 @@ started with rather than none; it bumps `ics_sequence`, sends an updated invite 
 re-queues the reminder, and tells the owner. A cancel frees the slot immediately, sends
 `METHOD:CANCEL`, withdraws the reminder, refunds the deposit when the business's policy says to — and
 says on screen, before the button, when it does not. Both are idempotent in SQL, so a double-clicked
-Cancel cannot attempt two refunds. The route is rate-limited by token and by IP.
+Cancel cannot attempt two refunds, and every refund carries a Stripe idempotency key so a webhook
+redelivery cannot issue a second one either. The page and its actions are rate-limited by token and
+by IP.
 
 ## Scheduled delivery
 
@@ -174,6 +177,31 @@ The design system is called **Daybook**: warm grey workspace, white surfaces, on
 accent, and time drawn as a proportional ribbon of material. Slot states are encoded by fill, pattern
 and value — never by hue — so the grid stays readable for colourblind users. Every token lives in
 `src/app/globals.css`, and nothing in the interface uses a colour that is not declared there.
+
+## Hardening
+
+The booking page is unauthenticated by design, so every public action is bounded. Creating a hold,
+submitting details and starting checkout are rate-limited by IP; submitting details is additionally
+limited by **email**, which is the bucket an IP limit cannot cover — many sources, one victim's inbox.
+
+Concurrency is capped without storing anything new about a visitor: **the window is the hold**. At
+most N *new* holds per eight minutes, and a hold lives eight minutes, so N is also the most a visitor
+can be sitting on at once. Moving a hold costs nothing, because `moveHold` releases the previous row
+in the same transaction. A second bucket keyed on business and date stops one address filling one
+Saturday. `test/5-policy/public-abuse.integration.test.ts` asserts the property that matters: after an
+address spends its whole allowance, the day still has times somebody else can book.
+
+The details form carries a honeypot and a minimum time-on-form measured from the hold's own
+`created_at` — a value Postgres stamped, not one the browser sent. Deliberately no CAPTCHA.
+
+Secrets are validated by a schema that lives behind `server-only` (`src/env.server.ts`), so importing
+it from a Client Component is a build error rather than a silent disclosure — the split was made after
+scanning the built browser bundle and finding the server *schema*, defaults and all, shipping to
+browsers. No secret value ever did, and now neither does the schema.
+
+Security headers, including a CSP that allows Stripe's domains, are set in `next.config.ts` so they
+apply to `next start` and to `npm run dev` too. See [DEPLOY.md](DEPLOY.md) for SPF/DKIM setup, the
+data-erasure procedure, what is and is not logged, and the accepted `npm audit` finding.
 
 ## Layout
 

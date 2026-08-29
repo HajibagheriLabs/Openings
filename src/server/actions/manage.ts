@@ -19,7 +19,11 @@ import {
   dispatchDeliveries,
   rescheduleReminder,
 } from "@/lib/notifications/delivery";
-import { CHECKOUT_METADATA, OWNER_TAG } from "@/lib/payments/checkout";
+import {
+  CHECKOUT_METADATA,
+  OWNER_TAG,
+  refundIdempotencyKey,
+} from "@/lib/payments/checkout";
 import { getStripe } from "@/lib/payments/stripe";
 import {
   cancelAppointment,
@@ -465,6 +469,10 @@ export async function cancelBooking(token: string): Promise<CancelResult> {
  * NEVER THROWS. A failed refund is logged at the loudest available volume and
  * the cancellation still stands.
  */
+
+/** This path's one reason, used in the metadata and in the idempotency key. */
+const REFUND_REASON = "cancelled_by_customer_within_policy" as const;
+
 async function refundIfPolicySays(
   view: ManageView,
   appointmentId: string,
@@ -498,14 +506,25 @@ async function refundIfPolicySays(
   }
 
   try {
-    const refund = await stripe.refunds.create({
-      payment_intent: row.paymentIntentId,
-      metadata: {
-        [CHECKOUT_METADATA.app]: OWNER_TAG,
-        [CHECKOUT_METADATA.appointmentId]: appointmentId,
-        reason: "cancelled_by_customer_within_policy",
+    const refund = await stripe.refunds.create(
+      {
+        payment_intent: row.paymentIntentId,
+        metadata: {
+          [CHECKOUT_METADATA.app]: OWNER_TAG,
+          [CHECKOUT_METADATA.appointmentId]: appointmentId,
+          reason: REFUND_REASON,
+        },
       },
-    });
+      {
+        /**
+         * Cancelling is a Server Action, which means a double click or a
+         * retried request whose response was lost can reach this twice. The
+         * key makes the second call return the first refund rather than issue
+         * a second one. See `refundIdempotencyKey`.
+         */
+        idempotencyKey: refundIdempotencyKey(appointmentId, REFUND_REASON),
+      },
+    );
 
     /* Stamped on the row so the `charge.refunded` webhook recognises this as
        OUR refund and does not alarm the owner about it a second time. */
@@ -513,6 +532,14 @@ async function refundIfPolicySays(
       .update(appointments)
       .set({ refundedAt: new Date(), refundedCents: refund.amount })
       .where(eq(appointments.id, appointmentId));
+
+    /* Every refund this application issues is logged, successful or not — the
+       money trail should be readable without opening Stripe. */
+    console.info(
+      `[manage] refunded ${refund.amount} to appointment ${appointmentId} ` +
+        `(refund ${refund.id}, payment intent ${row.paymentIntentId}, ` +
+        `reason ${REFUND_REASON})`,
+    );
 
     return refund.amount;
   } catch (error) {

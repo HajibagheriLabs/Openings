@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import { z } from "zod";
 
 import { db } from "@/db";
@@ -19,6 +20,14 @@ import {
   writeHoldCookie,
 } from "@/server/booking/hold-cookie";
 import { localDateOf } from "@/server/booking/picker";
+import {
+  clientAddressOf,
+  consumeRateLimit,
+  DETAILS_EMAIL_RULE,
+  DETAILS_IP_RULE,
+  MIN_SECONDS_ON_FORM,
+  rateLimitKey,
+} from "@/server/booking/rate-limit";
 import {
   checkLeadTime,
   checkMaxAdvance,
@@ -86,6 +95,29 @@ function refuse(refusal: PolicyRefusal): SubmitDetailsResult {
   return { ok: false, reason: "policy", refusal };
 }
 
+/**
+ * What an over-eager caller is told. See the note on the same message in
+ * src/server/actions/booking.ts — it names the network, not the person.
+ */
+const busyRefusal: PolicyRefusal = {
+  code: "rate-limited",
+  message:
+    "A lot of booking requests have come from your network just now. Wait a " +
+    "minute and try again — your slot is still held.",
+};
+
+/**
+ * What a bot is told, which is deliberately the SAME thing.
+ *
+ * A honeypot that says "you filled in the hidden field" is a honeypot that
+ * gets fixed. A submit that fails the honeypot or arrives impossibly fast is
+ * refused with the ordinary busy message, so an automated caller learns
+ * nothing about which check caught it. A real person can only reach this by
+ * an autofill extension writing into a hidden input, and the retry that
+ * follows will work.
+ */
+const REJECTED_AS_AUTOMATED = busyRefusal;
+
 export async function submitDetails(
   input: z.input<typeof submitSchema>,
 ): Promise<SubmitDetailsResult> {
@@ -110,6 +142,39 @@ export async function submitDetails(
 
   const { picker, hold, cookie } = loaded.context;
 
+  /**
+   * CHECK 2a — HOW LONG THE FORM WAS OPEN.
+   *
+   * Measured from `hold.createdAt`, which Postgres stamped when the customer
+   * chose the time, not from anything the browser sent. See the note on
+   * MIN_SECONDS_ON_FORM for why a hidden "rendered at" field was rejected: it
+   * is a number the caller controls, and a check over a number the caller
+   * controls is not a check.
+   */
+  if (now.getTime() - hold.createdAt.getTime() < MIN_SECONDS_ON_FORM * 1000) {
+    return refuse(REJECTED_AS_AUTOMATED);
+  }
+
+  /**
+   * CHECK 2b — HOW FAST THIS ADDRESS IS SUBMITTING.
+   *
+   * Before the form is parsed, so a flood of malformed submissions costs a
+   * counter rather than a validation pass. The email bucket cannot be counted
+   * yet — the address has not been parsed — so it is counted below, as soon as
+   * there is a valid one to count.
+   */
+  const address = clientAddressOf({ headers: await headers() });
+
+  const byAddress = await consumeRateLimit(
+    db,
+    rateLimitKey("details:ip", address),
+    DETAILS_IP_RULE,
+  );
+
+  if (!byAddress.allowed) {
+    return refuse(busyRefusal);
+  }
+
   /* CHECK 3 — the form itself. Parsed with the same schema the browser used,
      because everything the browser did is a suggestion. */
   const parsed = submitSchema.safeParse(input);
@@ -129,6 +194,39 @@ export async function submitDetails(
   }
 
   const details = parsed.data;
+
+  /**
+   * CHECK 3a — THE HONEYPOT.
+   *
+   * HERE, AND NOT IN THE SCHEMA, and the difference is the whole trap. A
+   * schema that refused a filled honeypot would return an ordinary validation
+   * failure naming the field, which tells whatever filled it exactly what
+   * caught it. This returns the same refusal a rate-limited human gets, so an
+   * automated caller learns nothing about which check it tripped.
+   *
+   * It also cannot be rendered: there is no visible field to hang a message
+   * on. See the note on the field in @/lib/validation/booking-details.
+   */
+  if (details.company !== "") {
+    return refuse(REJECTED_AS_AUTOMATED);
+  }
+
+  /**
+   * CHECK 3b — HOW MANY SUBMISSIONS THIS EMAIL IS RECEIVING.
+   *
+   * The address is only knowable once the form has parsed, which is why it is
+   * counted here and not beside the IP bucket. It is the bucket that bounds the
+   * one attack an IP limit cannot touch: many sources, one victim's inbox.
+   */
+  const byEmail = await consumeRateLimit(
+    db,
+    rateLimitKey("details:email", details.email),
+    DETAILS_EMAIL_RULE,
+  );
+
+  if (!byEmail.allowed) {
+    return refuse(busyRefusal);
+  }
 
   /* CHECK 4 — minimum lead time, measured now rather than when the day was
      drawn. Time passes while a form is filled in. */

@@ -872,6 +872,15 @@ export async function readOwnHold(
   staffId: string;
   serviceId: string;
   expiresAt: Date | null;
+  /**
+   * When Postgres stamped the hold — which is when the customer chose the
+   * time, and therefore when the details form became reachable.
+   *
+   * Selected so the submit can measure how long the form was actually open
+   * without trusting a timestamp from the browser. See MIN_SECONDS_ON_FORM in
+   * src/server/booking/rate-limit.ts.
+   */
+  createdAt: Date;
   /** Snapshotted when the hold was written. The authority on what is owed. */
   priceCents: number;
   depositCents: number;
@@ -884,6 +893,7 @@ export async function readOwnHold(
       staffId: appointments.staffId,
       serviceId: appointments.serviceId,
       expiresAt: appointments.holdExpiresAt,
+      createdAt: appointments.createdAt,
       priceCents: appointments.priceCents,
       depositCents: appointments.depositCents,
       manageTokenHash: appointments.manageTokenHash,
@@ -906,6 +916,7 @@ export async function readOwnHold(
     staffId: row.staffId,
     serviceId: row.serviceId,
     expiresAt: row.expiresAt,
+    createdAt: row.createdAt,
     priceCents: row.priceCents,
     depositCents: row.depositCents,
   };

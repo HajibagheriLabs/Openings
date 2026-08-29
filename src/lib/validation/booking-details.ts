@@ -82,6 +82,44 @@ export const bookingDetailsSchema = z.object({
   policyAccepted: z.literal(true, {
     message: "Tick the box to say you have read the cancellation policy.",
   }),
+
+  /**
+   * ═══ THE HONEYPOT ═══
+   *
+   * A real field, in the real form, that no human ever sees. It is hidden from
+   * sight AND from assistive technology — `aria-hidden`, `tabIndex={-1}`,
+   * `autoComplete="off"` — so a screen reader user never meets it and a
+   * keyboard user never tabs into it. Anything that fills it in got there by
+   * parsing the HTML and filling every input, which is what a naive form bot
+   * does and what a person cannot do.
+   *
+   * NAMED `company`, not `honeypot`. The name is the whole mechanism: a bot
+   * choosing what to type is choosing from field names, and a plausible one
+   * gets filled while an obviously-fake one gets skipped.
+   *
+   * IT IS NOT A DEFENCE AGAINST A DETERMINED ATTACKER, and it is not sold as
+   * one. Anything driving a real browser, or anything written against this
+   * form specifically, walks past it. It costs one hidden input and it removes
+   * the traffic that never looked — which is most of it. The rate limits are
+   * what stop the rest. There is deliberately no CAPTCHA: it would put a
+   * puzzle in front of every real customer to inconvenience a bot for an
+   * afternoon.
+   */
+  /**
+   * ═══ DELIBERATELY NOT VALIDATED HERE ═══
+   *
+   * The obvious spelling is `.max(0)`, and it defeats the trap. A schema that
+   * refuses a filled honeypot makes the submit come back as an ordinary
+   * VALIDATION FAILURE naming the field — `{ company: "must be empty" }` —
+   * which tells whatever filled it exactly what caught it and exactly what to
+   * stop sending. A honeypot that announces itself is a honeypot with a
+   * one-line fix.
+   *
+   * So the field is accepted as any string and the SERVER checks it after
+   * parsing, refusing with the same message an over-eager human gets. See the
+   * honeypot check in src/server/actions/details.ts.
+   */
+  company: z.string().max(200).optional().default(""),
 });
 
 export type BookingDetailsInput = z.input<typeof bookingDetailsSchema>;
@@ -97,4 +135,8 @@ export const EMPTY_BOOKING_DETAILS: BookingDetailsInput = {
   phone: "",
   note: "",
   policyAccepted: false as unknown as true,
+  company: "",
 };
+
+/** The honeypot's field name, so the form and the schema cannot drift apart. */
+export const HONEYPOT_FIELD = "company" as const;

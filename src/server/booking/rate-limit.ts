@@ -6,6 +6,7 @@ import { lt, sql } from "drizzle-orm";
 
 import type { Db } from "@/db/client";
 import { rateLimits } from "@/db/schema";
+import { DEFAULT_HOLD_MINUTES } from "@/lib/scheduling/booking";
 
 /**
  * A fixed-window rate limiter, counted in Postgres.
@@ -143,6 +144,155 @@ export async function consumeRateLimit(
     };
   }
 }
+
+/* ===========================================================================
+   The public booking flow
+   ---------------------------------------------------------------------------
+   ═══ WHY THIS EXISTS AT ALL ═══
+
+   /book/<slug> has no session behind it. Customers are guests by design, which
+   means every Server Action under it — take a slot, submit details, start
+   checkout — is an unauthenticated HTTP endpoint that a stranger with `curl`
+   can post to as often as they like. Three things can be spent that way:
+   database rows (holds), Stripe objects (Checkout Sessions), and email
+   (confirmations). Only the first is free.
+
+   Nothing here protects CORRECTNESS. The exclusion constraint does that, and
+   it does it perfectly whether the caller is a customer or a script. These
+   limits are about COST and AVAILABILITY: how much of a business's diary one
+   address may sit on, and how much of somebody else's money it may spend.
+   =========================================================================== */
+
+/**
+ * THE CONCURRENCY CAP, EXPRESSED AS A RATE — and the trick is worth stating.
+ *
+ * What we actually want to bound is "how many slots may one visitor be HOLDING
+ * AT ONCE". A hold is not a counter, though: it is a row with an eight-minute
+ * deadline, and counting live ones per visitor would mean attributing rows to
+ * visitors, which means putting an address (or a hash of one) on the
+ * appointments table — a schema change that stores a new piece of personal
+ * data on every booking forever, to answer a question that is only asked for
+ * about eight minutes.
+ *
+ * So the window IS the hold. If a visitor may take at most N NEW holds in any
+ * eight-minute period, and a hold lives eight minutes, then they can never be
+ * holding more than N at a time. The cap falls out of the rate for free, and
+ * the table keeps one bounded row per address instead of a column per booking.
+ *
+ * COUNTED ONLY WHEN A HOLD IS CREATED, never when one is MOVED. Tapping a
+ * different time calls the same action, but `moveHold` releases the previous
+ * hold inside the same transaction, so the visitor still holds exactly one
+ * slot and has consumed nothing. A limiter that could not tell those apart
+ * would punish the one behaviour the picker is designed around — trying times
+ * until one suits.
+ */
+export const HOLD_CREATE_IP_RULE: RateLimitRule = {
+  limit: 10,
+  windowSeconds: DEFAULT_HOLD_MINUTES * 60,
+};
+
+/**
+ * THE SAME CAP, NARROWED TO ONE BUSINESS ON ONE DAY.
+ *
+ * The global cap above stops somebody holding a lot of slots. It does not stop
+ * them holding a lot of slots ON THE SAME AFTERNOON, which is the attack that
+ * actually hurts: ten holds spread over a month is nothing, ten holds across
+ * one Saturday is a salon that looks fully booked to every real customer for
+ * eight minutes at a time, indefinitely.
+ *
+ * Keyed on address + business + local date, so it bounds exactly that.
+ *
+ * FOUR, AND THE TRADE IS REAL. A normal customer holds ONE slot — the cookie
+ * moves it rather than adding to it — so reaching four from one address means
+ * four different people behind one NAT booking the same shop on the same day,
+ * which is an office or a family and is uncommon but not impossible. Four
+ * leaves a typical eight-to-twelve slot day with openings for everybody else,
+ * which is the property that matters; the cost is that the fifth person behind
+ * that address waits a few minutes. Refusing to make that trade means either
+ * no cap or a per-visitor identity this product does not want to store.
+ */
+export const HOLD_CREATE_DAY_RULE: RateLimitRule = {
+  limit: 4,
+  windowSeconds: DEFAULT_HOLD_MINUTES * 60,
+};
+
+/**
+ * How fast one address may ASK, as opposed to how much it may hold.
+ *
+ * Deliberately loose, because this counts every tap on the picker including
+ * every move. Somebody comparing times on a busy Saturday can easily click
+ * fifteen slots in five minutes and must not be stopped; a script hammering
+ * the endpoint does thousands and must be.
+ */
+export const HOLD_REQUEST_IP_RULE: RateLimitRule = {
+  limit: 60,
+  windowSeconds: 5 * 60,
+};
+
+/**
+ * Submitting the details form.
+ *
+ * Each accepted submit either confirms a booking and sends email, or creates a
+ * Stripe Checkout Session. Both cost real money at a third party, so this is
+ * tighter than the picker's limits — and a person only ever presses it once.
+ */
+export const DETAILS_IP_RULE: RateLimitRule = {
+  limit: 12,
+  windowSeconds: 10 * 60,
+};
+
+/**
+ * BY EMAIL, and it is the one that stops the mailbox attack.
+ *
+ * The IP limit above bounds one source. It does nothing about a botnet aiming
+ * confirmations at one victim's inbox, because each request comes from
+ * somewhere new. The address being written to is the same every time, and it
+ * is the only stable thing in that attack — so it gets its own bucket.
+ *
+ * `src/server/booking/policy.ts` also caps how many appointments one email may
+ * hold, and the two are not the same check: that one counts BOOKINGS and lives
+ * in the domain policy ("you already have three appointments here"); this one
+ * counts REQUESTS and lives here ("that is a lot of submissions"). One is a
+ * business rule, the other is abuse control.
+ */
+export const DETAILS_EMAIL_RULE: RateLimitRule = {
+  limit: 6,
+  windowSeconds: 60 * 60,
+};
+
+/**
+ * Starting checkout.
+ *
+ * `startCheckout` reuses an open session rather than creating a second one, so
+ * pressing the retry button repeatedly is cheap. It is not free — every call
+ * still reaches Stripe — and a stranger looping it is spending someone else's
+ * API quota, so it is bounded.
+ */
+export const CHECKOUT_IP_RULE: RateLimitRule = {
+  limit: 20,
+  windowSeconds: 10 * 60,
+};
+
+/**
+ * The shortest time in which a human could plausibly have filled the form in.
+ *
+ * ═══ MEASURED FROM THE HOLD, NOT FROM THE BROWSER ═══
+ *
+ * The obvious implementation is a hidden field carrying when the form was
+ * rendered, and it is worthless: it is a number the client sends, so anything
+ * automating this sets it to whatever passes. Rejected on those grounds.
+ *
+ * `appointments.created_at` is the same measurement taken somewhere a caller
+ * cannot reach. The hold is written when the time is chosen, which is the
+ * moment the form becomes reachable, and Postgres stamps it. The gap between
+ * that stamp and the submit arriving IS time-on-form, and it is not forgeable.
+ *
+ * Three seconds is the threshold: it is under any real person's typing time
+ * for a name, an email and a consent box, and over any script's. It is not
+ * trying to be clever — a determined attacker adds a `sleep`. It is trying to
+ * cost nothing and stop the traffic that does not bother.
+ */
+export const MIN_SECONDS_ON_FORM = 3;
 
 /* ===========================================================================
    The manage page's two limits

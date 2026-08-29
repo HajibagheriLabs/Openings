@@ -1,5 +1,6 @@
 import { CalendarPlus, Mail, MapPin, Phone } from "lucide-react";
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import Link from "next/link";
 
 import { BookingShell } from "@/components/booking/booking-shell";
@@ -23,6 +24,13 @@ import {
   type BusinessContact,
   type ManageView,
 } from "@/server/booking/manage";
+import {
+  clientAddressOf,
+  consumeRateLimit,
+  MANAGE_IP_RULE,
+  MANAGE_TOKEN_RULE,
+  rateLimitKey,
+} from "@/server/booking/rate-limit";
 
 /**
  * "My appointment" — the page every booking email links to.
@@ -33,14 +41,24 @@ import {
  * src/server/booking/manage.ts for why looking a hash up is the right shape
  * here and where the token comes from.
  *
- * ═══ NEVER A BARE 404 ═══
+ * ═══ TWO OUTCOMES, NOT THREE ═══
  *
- * Three outcomes, three different pages, and none of them is a dead end. A live
- * link gets the appointment. An expired one gets the reason, the date it
- * lapsed, and the business's own phone number and email — we still know
- * exactly who they booked with. A token matching nothing gets an honest "we
- * cannot find this", because there genuinely is no business to name, plus the
- * one thing that always works: the most recent email they were sent.
+ * A live link gets the appointment. EVERYTHING ELSE — a mistyped token, a
+ * forged one, and a genuine link whose appointment finished months ago — gets
+ * one identical page that names no business. See the long note in
+ * src/server/booking/manage.ts for why the expired case stopped being special:
+ * a different answer for a real-but-old token is an oracle, and it leaks who
+ * somebody booked with to anybody who later holds the URL.
+ *
+ * STILL NEVER A BARE 404. The page says what happened and what to do; it says
+ * the same thing to everybody.
+ *
+ * ═══ RATE-LIMITED HERE, NOT ONLY IN THE ACTIONS ═══
+ *
+ * The actions behind this page have been limited since they were written. This
+ * page had not been, and it is the cheaper target: a GET with a token in the
+ * path is the most direct way to ask "is this token real?". It is counted now,
+ * by address, against the same bucket the actions use.
  */
 export const metadata: Metadata = {
   title: "Your appointment",
@@ -56,16 +74,36 @@ export default async function ManagePage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  const resolved = await resolveManageToken(db, decodeURIComponent(token));
 
-  if (resolved.status === "unknown") {
-    return <UnknownLink />;
+  /**
+   * COUNTED BEFORE THE LOOKUP, and counted whether or not the token is
+   * well-formed.
+   *
+   * Counting only well-formed tokens, or only ones that found a row, would let
+   * somebody walk the token space for free — the same reasoning as the note on
+   * `gate` in src/server/actions/manage.ts. Both buckets are consumed, so an
+   * attacker cannot keep one allowance warm by exhausting the other.
+   */
+  const address = clientAddressOf({ headers: await headers() });
+  const presented = decodeURIComponent(token);
+
+  const [byAddress, byToken] = await Promise.all([
+    consumeRateLimit(db, rateLimitKey("manage:ip", address), MANAGE_IP_RULE),
+    consumeRateLimit(
+      db,
+      rateLimitKey("manage:token", presented),
+      MANAGE_TOKEN_RULE,
+    ),
+  ]);
+
+  if (!byAddress.allowed || !byToken.allowed) {
+    return <TooManyRequests />;
   }
 
-  if (resolved.status === "expired") {
-    return (
-      <ExpiredLink contact={resolved.contact} expiredAt={resolved.expiredAt} />
-    );
+  const resolved = await resolveManageToken(db, presented);
+
+  if (resolved.status === "dead") {
+    return <DeadLink />;
   }
 
   const view = resolved.view;
@@ -343,78 +381,30 @@ function Contact({ contact }: { contact: BusinessContact }) {
   );
 }
 
-/* ===========================================================================
-   The two ways a link fails
-   =========================================================================== */
-
 /**
- * The row is there and the link has simply run out of life.
+ * The one page every unusable link gets.
  *
- * We know exactly who they booked with, so this hands over the business's own
- * details rather than apologising in the abstract. It also says WHEN it
- * lapsed, because "my link stopped working" and "my link stopped working three
- * weeks ago" are different conversations to have with a salon.
+ * NAMES NO BUSINESS, NO DATE AND NO REASON — not out of unhelpfulness but
+ * because saying any of them would answer "did this token ever mean anything?"
+ * for whoever is asking. See src/server/booking/manage.ts.
+ *
+ * What it can do, and what actually solves this for a real customer, is point
+ * at the thing that never stops working: the email the link came from. That
+ * email names the business on every line of it, carries their phone number in
+ * its footer, and — if the appointment moved — carries a newer link.
  */
-function ExpiredLink({
-  contact,
-  expiredAt,
-}: {
-  contact: BusinessContact;
-  expiredAt: Date;
-}) {
+function DeadLink() {
   return (
     <BookingShell>
       <section className="flex flex-col gap-5">
-        <h1 className="type-page-title text-ink">This link has expired</h1>
+        <h1 className="type-page-title text-ink">This link does not work</h1>
 
         <p className="type-body text-ink-muted">
-          Manage links stop working {MANAGE_TOKEN_TTL_DAYS} days after the
-          appointment they were for, so this one closed on{" "}
-          <time dateTime={expiredAt.toISOString()}>
-            {new Intl.DateTimeFormat("en-GB", {
-              day: "numeric",
-              month: "long",
-              year: "numeric",
-              timeZone: "UTC",
-            }).format(expiredAt)}
-          </time>
-          . Nothing is wrong with your booking — there is just nothing left to
-          change from here.
-        </p>
-
-        <p className="type-body text-ink-muted">
-          {contact.name} can still help with anything about that appointment.
-        </p>
-
-        <Contact contact={contact} />
-
-        <PillButton asChild>
-          <Link href={contact.bookingPath}>Book with them again</Link>
-        </PillButton>
-      </section>
-    </BookingShell>
-  );
-}
-
-/**
- * Nothing matched the token.
- *
- * A mistyped link, a truncated one, a forged one, or one from a different
- * deployment. THERE IS NO BUSINESS TO NAME HERE and inventing one would be
- * worse than saying so — the token is the only thing that identifies anything,
- * and it identified nothing. What this can do is name the one thing that
- * always works, which is the most recent email they were sent.
- */
-function UnknownLink() {
-  return (
-    <BookingShell>
-      <section className="flex flex-col gap-5">
-        <h1 className="type-page-title text-ink">We cannot find that booking</h1>
-
-        <p className="type-body text-ink-muted">
-          This link does not match an appointment. It usually means the address
-          was cut short somewhere between the email and the browser — links like
-          this are long, and some apps break them across a line.
+          Either the address was cut short somewhere between the email and the
+          browser — links like this are long, and some apps break them across a
+          line — or the appointment it pointed at is long past. Manage links
+          stop working {MANAGE_TOKEN_TTL_DAYS} days after the appointment they
+          were for.
         </p>
 
         <p className="type-body text-ink-muted">
@@ -427,6 +417,31 @@ function UnknownLink() {
           If that does not work either, the business you booked with can find
           you by name — their details are at the bottom of any email they have
           sent you.
+        </p>
+      </section>
+    </BookingShell>
+  );
+}
+
+/**
+ * Too many requests from one place.
+ *
+ * Says nothing about the token, for the same reason `DeadLink` does not: a
+ * distinct answer here would tell an attacker their guess was at least
+ * well-formed. It reads as a network problem because from an ordinary
+ * customer's point of view — several people in one office, one address — that
+ * is exactly what it is.
+ */
+function TooManyRequests() {
+  return (
+    <BookingShell>
+      <section className="flex flex-col gap-5">
+        <h1 className="type-page-title text-ink">Too many requests</h1>
+
+        <p className="type-body text-ink-muted">
+          A lot of requests have come from your network in the last few minutes,
+          so this one was not answered. Nothing has happened to your
+          appointment. Wait a minute and reload the page.
         </p>
       </section>
     </BookingShell>

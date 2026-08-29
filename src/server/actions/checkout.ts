@@ -1,6 +1,7 @@
 "use server";
 
 import { and, eq } from "drizzle-orm";
+import { headers } from "next/headers";
 import { z } from "zod";
 
 import { db } from "@/db";
@@ -18,6 +19,12 @@ import {
   readHoldCookie,
   writeHoldCookie,
 } from "@/server/booking/hold-cookie";
+import {
+  CHECKOUT_IP_RULE,
+  clientAddressOf,
+  consumeRateLimit,
+  rateLimitKey,
+} from "@/server/booking/rate-limit";
 
 /**
  * The two things the payment step asks the server.
@@ -58,6 +65,33 @@ export async function beginCheckout(
 
   if (!parsed.success) {
     return { ok: false, reason: "error", message: BROKE_MESSAGE };
+  }
+
+  /**
+   * COUNTED BEFORE THE HOLD IS RESOLVED.
+   *
+   * Every call past this point reaches Stripe — `startCheckout` reuses an open
+   * session rather than creating a second one, which makes the retry button
+   * cheap but never free. A stranger looping this endpoint is spending an API
+   * quota that is not theirs, so the bound goes in front of the work.
+   */
+  const allowed = await consumeRateLimit(
+    db,
+    rateLimitKey("checkout:ip", clientAddressOf({ headers: await headers() })),
+    CHECKOUT_IP_RULE,
+  );
+
+  if (!allowed.allowed) {
+    return {
+      ok: false,
+      reason: "policy",
+      refusal: {
+        code: "rate-limited",
+        message:
+          "A lot of payment attempts have come from your network just now. " +
+          "Wait a minute and try again — your slot is still held.",
+      },
+    };
   }
 
   const now = new Date();

@@ -27,6 +27,7 @@ import { formatCents } from "@/lib/money";
 import {
   bookingDetailsSchema,
   EMPTY_BOOKING_DETAILS,
+  HONEYPOT_FIELD,
   type BookingDetailsField,
   type BookingDetailsInput,
 } from "@/lib/validation/booking-details";
@@ -142,7 +143,27 @@ export function DetailsStep({
     setFormError(null);
     setRefusal(null);
 
-    const parsed = bookingDetailsSchema.safeParse(values);
+    /**
+     * ═══ THE HONEYPOT IS CLEARED BEFORE THE CLIENT VALIDATES ═══
+     *
+     * It has to be, and the reason is the one person the trap can hurt.
+     *
+     * The schema refuses a non-empty `company`, and there is no visible field
+     * to hang that error on — so a password manager that autofills every input
+     * on the page would leave a real customer pressing Confirm against a form
+     * that silently refuses to submit, with nothing on screen to fix. That is a
+     * far worse outcome than letting a bot through.
+     *
+     * Nothing is lost by clearing it here. Anything that runs this code is a
+     * real browser, which is exactly the case a honeypot never catches; what it
+     * catches is a caller POSTing the form directly, and that caller never
+     * reaches this line. The SERVER checks the raw value it was sent, which is
+     * where the check belongs.
+     */
+    const parsed = bookingDetailsSchema.safeParse({
+      ...values,
+      [HONEYPOT_FIELD]: "",
+    });
 
     if (!parsed.success) {
       const next: Partial<Record<BookingDetailsField, string>> = {};
@@ -351,7 +372,10 @@ export function DetailsStep({
             id="booking-details"
             onSubmit={submit}
             noValidate
-            className="flex flex-col gap-5"
+            /* `relative` so the honeypot at the bottom is positioned against
+               the form rather than the page. Left overflow is not scrollable,
+               so parking it 9999px to the left adds no scrollbar. */
+            className="relative flex flex-col gap-5"
           >
             <FormError>{formError}</FormError>
 
@@ -475,6 +499,40 @@ export function DetailsStep({
                   {errors.policyAccepted}
                 </p>
               ) : null}
+            </div>
+
+            {/*
+              ═══ THE HONEYPOT ═══
+
+              Invisible to eyes, to screen readers and to the Tab key. It is
+              inside the form so anything parsing the HTML finds it, and out of
+              reach of anything that is not.
+
+              `hidden` alone would do most of this, and is deliberately NOT
+              used: some bots skip hidden inputs specifically. This is a real,
+              rendered, focusable-by-nothing field positioned outside the
+              viewport, which is the shape that actually gets filled in.
+
+              A person can only reach it through a password manager writing
+              into every input on the page — and that person is never blocked
+              by it, because `submit` above clears the field before validating.
+              The check that matters runs on the server, against what a direct
+              POST actually sent.
+            */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute -left-[9999px] size-px overflow-hidden"
+            >
+              <label htmlFor="booking-company">Company</label>
+              <input
+                id="booking-company"
+                name={HONEYPOT_FIELD}
+                type="text"
+                tabIndex={-1}
+                autoComplete="off"
+                value={values.company ?? ""}
+                onChange={(event) => set(HONEYPOT_FIELD, event.target.value)}
+              />
             </div>
           </form>
         )}

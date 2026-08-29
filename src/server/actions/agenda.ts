@@ -10,7 +10,11 @@ import {
   cancelScheduledDeliveries,
   dispatchDeliveries,
 } from "@/lib/notifications/delivery";
-import { CHECKOUT_METADATA, OWNER_TAG } from "@/lib/payments/checkout";
+import {
+  CHECKOUT_METADATA,
+  OWNER_TAG,
+  refundIdempotencyKey,
+} from "@/lib/payments/checkout";
 import { getStripe } from "@/lib/payments/stripe";
 import {
   cancelAppointment,
@@ -372,6 +376,10 @@ export async function cancelAppointmentAsBusiness(input: {
  * cancellation still stands — an owner who has told a customer the appointment
  * is off must not have that undone by Stripe being slow.
  */
+
+/** This path's one reason, used in the metadata and in the idempotency key. */
+const REFUND_REASON = "cancelled_by_business" as const;
+
 async function refundDeposit(detail: AppointmentDetail): Promise<number> {
   if (detail.depositCents <= 0 || !detail.depositPaid || detail.refundedCents) {
     return 0;
@@ -395,14 +403,25 @@ async function refundDeposit(detail: AppointmentDetail): Promise<number> {
   }
 
   try {
-    const refund = await stripe.refunds.create({
-      payment_intent: row.paymentIntentId,
-      metadata: {
-        [CHECKOUT_METADATA.app]: OWNER_TAG,
-        [CHECKOUT_METADATA.appointmentId]: detail.id,
-        reason: "cancelled_by_business",
+    const refund = await stripe.refunds.create(
+      {
+        payment_intent: row.paymentIntentId,
+        metadata: {
+          [CHECKOUT_METADATA.app]: OWNER_TAG,
+          [CHECKOUT_METADATA.appointmentId]: detail.id,
+          reason: REFUND_REASON,
+        },
       },
-    });
+      {
+        /**
+         * Cancelling from the agenda is a Server Action, so a double click or
+         * a retried request whose response was lost can reach this twice. The
+         * key makes the second call return the first refund instead of issuing
+         * another. See `refundIdempotencyKey`.
+         */
+        idempotencyKey: refundIdempotencyKey(detail.id, REFUND_REASON),
+      },
+    );
 
     /* Stamped on the row so the `charge.refunded` webhook recognises this as
        OUR refund and does not alarm the owner about it a second time. */
@@ -410,6 +429,14 @@ async function refundDeposit(detail: AppointmentDetail): Promise<number> {
       .update(appointments)
       .set({ refundedAt: new Date(), refundedCents: refund.amount })
       .where(eq(appointments.id, detail.id));
+
+    /* Logged on success as well as failure, like the other two refund paths:
+       the money trail should be readable without opening Stripe. */
+    console.info(
+      `[agenda] refunded ${refund.amount} to appointment ${detail.id} ` +
+        `(refund ${refund.id}, payment intent ${row.paymentIntentId}, ` +
+        `reason ${REFUND_REASON})`,
+    );
 
     return refund.amount;
   } catch (error) {

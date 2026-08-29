@@ -43,6 +43,8 @@ export interface DetailsContext {
     staffId: string;
     serviceId: string;
     expiresAt: Date;
+    /** When the hold was written. The unforgeable start of "time on form". */
+    createdAt: Date;
     priceCents: number;
     depositCents: number;
   };

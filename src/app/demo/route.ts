@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 
 import { db } from "@/db";
 import { businesses, users } from "@/db/schema";
-import { serverEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 import { auth } from "@/lib/auth";
 import {
   BUSINESS_HINT_COOKIE,

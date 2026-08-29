@@ -1,6 +1,6 @@
 import "server-only";
 
-import { serverEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 
 import { createDb } from "./client";
 

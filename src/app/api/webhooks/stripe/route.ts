@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 
-import { serverEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 import { getStripe } from "@/lib/payments/stripe";
 import { handleStripeEvent } from "@/server/payments/webhook";
 

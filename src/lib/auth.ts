@@ -6,7 +6,8 @@ import { nextCookies } from "better-auth/next-js";
 
 import { db } from "@/db";
 import * as schema from "@/db/schema";
-import { clientEnv, serverEnv } from "@/env";
+import { clientEnv } from "@/env";
+import { serverEnv } from "@/env.server";
 import { AUTH_COOKIE_PREFIX } from "@/lib/auth-cookies";
 import { APP_NAME } from "@/lib/brand";
 import {
