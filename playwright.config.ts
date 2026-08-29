@@ -54,7 +54,15 @@ export default defineConfig({
   workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+  reporter: process.env.CI
+    ? [
+        ["github"],
+        ["list"],
+        /* Machine-readable, so CI can refuse a run where everything skipped.
+           See scripts/e2e-summary.mjs. */
+        ["json", { outputFile: "playwright-report/results.json" }],
+      ]
+    : [["list"]],
 
   globalSetup: "./e2e/global-setup.ts",
 

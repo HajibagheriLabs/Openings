@@ -213,6 +213,13 @@ jobs:
         env:
           E2E_SKIP_BUILD: "1"
 
+      # A Playwright run where every test skipped itself also exits 0. This
+      # reports what actually ran and fails if the answer is "nothing" — a
+      # green badge over an empty suite is worse than a red one.
+      - name: Summarise the browser run
+        if: always()
+        run: node scripts/e2e-summary.mjs
+
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

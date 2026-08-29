@@ -124,54 +124,49 @@ async function forwardWebhook(session: Stripe.Checkout.Session, baseUrl: string)
 async function payOnStripe(page: Page): Promise<void> {
   await page.waitForURL(/checkout\.stripe\.com/, { timeout: 60_000 });
 
-  /**
-   * DECLINE LINK FIRST, and the order is the whole trick.
-   *
-   * "Save my information for faster checkout" is ticked by default, and while
-   * it is ticked Stripe replaces the card form with Link's express flow — a
-   * phone number and a "Book" button. The card fields are not hidden, they do
-   * not exist, so every attempt to select the card row above was selecting a
-   * row whose contents were never going to appear.
-   */
-  const saveDetails = page.getByRole("checkbox", {
-    name: /Save my information/,
-  });
-
-  if ((await saveDetails.count()) && (await saveDetails.first().isChecked())) {
-    await saveDetails.first().uncheck();
-  }
-
-  /**
-   * Located by ACCESSIBLE NAME, not by placeholder.
-   *
-   * The placeholders move with the country — a US session shows "12345" on the
-   * ZIP field and a UK one shows a postcode — and the first attempt at this
-   * silently matched the phone number instead, submitted with an empty ZIP,
-   * and left Stripe showing an invalid field the test could not see.
-   */
   const cardNumber = page.getByRole("textbox", { name: "Card number" });
 
   /**
-   * Then reveal the card form, if it is behind a payment-method chooser.
+   * GET TO THE CARD FORM, retrying the whole approach until it is on screen.
    *
-   * A euro session offers Bancontact, MB WAY, EPS and Satispay alongside the
-   * card. On an account offering cards only there is no chooser at all and the
-   * fields are simply there — hence asking the page rather than assuming.
+   * Two things stand in the way and both arrive asynchronously, which is why
+   * this is a loop rather than a sequence:
    *
-   * `force` is doing real work: the row's radio is covered by a full-width
-   * button that swallows the pointer, so an ordinary check waits for an
-   * element it will never be allowed to reach. It is a third-party page, and
-   * this is the price of driving one.
+   *   LINK. "Save my information for faster checkout" is ticked by default,
+   *   and while it is ticked Stripe shows Link's express flow — a phone number
+   *   and a "Book" button — instead of a card form. It renders after the rest
+   *   of the page, so a single check-and-uncheck can run before the box
+   *   exists, find nothing, and move on.
+   *
+   *   THE PAYMENT METHOD. A euro session offers Bancontact, MB WAY, EPS and
+   *   Satispay alongside the card, and the card fields do not exist until Card
+   *   is chosen. `force` is needed because the row's radio sits under a
+   *   full-width button that swallows the pointer.
+   *
+   * Neither is our markup and neither is stable, so the assertion is the goal
+   * — the card number field being present — and everything above it is a means
+   * that gets tried again until the goal is met.
    */
-  if (!(await cardNumber.isVisible().catch(() => false))) {
+  await expect(async () => {
+    const saveDetails = page.getByRole("checkbox", {
+      name: /Save my information/,
+    });
+
+    if ((await saveDetails.count()) && (await saveDetails.first().isChecked())) {
+      await saveDetails.first().uncheck();
+    }
+
     const cardOption = page.getByRole("radio", { name: "Card", exact: true });
 
-    if (await cardOption.count()) {
+    if (
+      !(await cardNumber.isVisible().catch(() => false)) &&
+      (await cardOption.count())
+    ) {
       await cardOption.first().check({ force: true });
     }
-  }
 
-  await expect(cardNumber).toBeVisible({ timeout: 30_000 });
+    await expect(cardNumber).toBeVisible({ timeout: 3_000 });
+  }).toPass({ timeout: 60_000, intervals: [500, 1_000, 2_000] });
 
   await cardNumber.fill(TEST_CARD.number);
   await page.getByRole("textbox", { name: "Expiration" }).fill(TEST_CARD.expiry);
