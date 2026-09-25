@@ -199,6 +199,14 @@ jobs:
         env:
           DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
 
+      # The same assertion a deployment runs against production: the extension
+      # is installed and the exclusion constraint exists with the right shape.
+      # Here it proves the script itself, on a database migrated from nothing.
+      - name: Verify the database can refuse a double booking
+        run: npm run db:verify
+        env:
+          DATABASE_URL: ${{ env.E2E_DATABASE_URL }}
+
       # Chromium only. Three engines is three downloads for a suite whose job
       # is to prove the wiring, not to survey rendering.
       - name: Install Chromium

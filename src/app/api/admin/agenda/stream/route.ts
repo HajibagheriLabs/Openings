@@ -54,6 +54,17 @@ import {
  */
 export const runtime = "nodejs";
 
+/**
+ * The whole of what Vercel Hobby allows with Fluid Compute on, in seconds.
+ *
+ * A literal because Next reads route config statically. The stream retires
+ * itself before this — STREAM_MAX_LIFETIME_MS is kept below it on purpose — so
+ * the platform's limit is a backstop that a healthy connection never reaches.
+ * Without Fluid Compute the Hobby ceiling is 60 seconds, which is why
+ * vercel.json turns it on rather than leaving it to a dashboard toggle.
+ */
+export const maxDuration = 300;
+
 /* Never cached, never prerendered — and `no-transform` below matters as much:
    a proxy that gzips or buffers an event stream turns it into a very slow
    download that delivers nothing until it ends. */

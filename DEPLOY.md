@@ -1,105 +1,416 @@
 # Deploying Openings
 
-Everything needed to take this from a laptop to a public URL, in the order it
-has to happen, plus the operational procedures that only matter once real
-people are using it.
+How to take this from a laptop to a public URL on **Vercel Hobby + Neon Free**,
+in the order it has to happen, then how to prove it works — plus the
+operational procedures that only matter once real people are using it.
 
-Where something is a known limitation it says so rather than being left out.
-The application steps here have been exercised against a running build; the DNS
-in §5 depends on your registrar and has to be done once, by you.
+Everything here costs nothing. Every step that happens in a dashboard is
+marked **[dashboard]** and has to be done by the account owner. Every command
+marked **[terminal]** has been run against a real Neon database and a local
+production build (`next build` + `next start`) — not yet against the deployed
+one, which does not exist until you do the dashboard steps. Where something is
+a known limitation it says so.
+
+1. [Before you start](#1-before-you-start)
+2. [Deploy, step by step](#2-deploy-step-by-step)
+3. [The live smoke test](#3-the-live-smoke-test)
+4. [Why reminders go through QStash: the Hobby cron constraints](#4-why-reminders-go-through-qstash-the-hobby-cron-constraints)
+5. [Email deliverability — SPF, DKIM and DMARC](#5-email-deliverability--spf-dkim-and-dmarc)
+6. [What is logged, and what is deliberately not](#6-what-is-logged-and-what-is-deliberately-not)
+7. [Reconstructing the money trail](#7-reconstructing-the-money-trail)
+8. [Data requests: erasing a customer](#8-data-requests-erasing-a-customer)
+9. [Content Security Policy](#9-content-security-policy)
+10. [Abuse limits, and how to tune them](#10-abuse-limits-and-how-to-tune-them)
+11. [Known limitations](#11-known-limitations)
 
 ---
 
-## 1. Before anything else: the database
+## 1. Before you start
 
-Neon, or any Postgres 14+.
+**Accounts:** GitHub, Vercel (Hobby), Neon (Free), Stripe (test mode only),
+Resend, Upstash (QStash). None needs a card.
 
-**`btree_gist` is not optional.** The no-overlap exclusion constraint is what
-makes this application correct, and it cannot be created without the extension.
-The first migration creates it; a role without permission to do so will fail
-there rather than half-way through.
+### ⚠ Vercel Hobby cannot deploy from an organization repository
 
-```bash
-npm run db:migrate
+A Hobby project **cannot be connected to a private repository owned by a
+GitHub organization** — the import either refuses or, worse, works once and
+then starts failing. Pro can; Hobby cannot.
+
+This repository is `github.com/HajibagheriLabs/Openings`. Despite the name,
+`HajibagheriLabs` is a **personal** GitHub account (GitHub's API reports its
+type as `User`, not `Organization`), and the repository is public, so Hobby can
+import it. If it is ever transferred to an organization, move it back to a
+personal account (or keep it public) before touching Vercel.
+
+### Pick one region and use it twice
+
+Vercel Hobby runs functions in **one** region — by default Washington, D.C.
+(`iad1`). Put the Neon database in **AWS US East 1 (N. Virginia)** to match.
+
+This is not a nicety. Rendering a booking page is several *sequential*
+database round trips, and a transaction is several more. Measured from a
+client an ocean away from its database: 2.8 s to open a connection and about
+300 ms per query, which turns one page into several seconds. Same-region, a
+round trip is a millisecond or two. If you prefer Europe, put the functions in
+Frankfurt (`fra1`) and Neon in AWS EU Central 1 instead — the point is that
+they agree.
+
+---
+
+## 2. Deploy, step by step
+
+Throughout, **`PRODUCTION_URL`** means the project's production origin, e.g.
+`https://openings.vercel.app` — `https://`, no trailing slash, no path.
+
+### Step 1 — Import the repository into Vercel [dashboard]
+
+1. <https://vercel.com/new> → **Continue with GitHub**.
+2. When asked, install the Vercel GitHub app on the **HajibagheriLabs** account
+   and grant it **Only select repositories → Openings**.
+3. Import **Openings**. Vercel detects Next.js; leave the root directory, build
+   command and install command at their defaults.
+4. Name the project `openings`. The production URL becomes
+   `https://openings.vercel.app` if that name is free, otherwise Vercel adds a
+   suffix. **Write down what it actually is** (Project → Settings → Domains) —
+   several values below must match it exactly.
+5. Click **Deploy**. This first deployment has no database and no secrets, so
+   it will either fail or serve a site that errors. Both are fine: it exists to
+   create the project and its URL.
+6. Project → Settings → Build and Deployment → **Node.js Version → 24.x**, the
+   version CI and development use.
+
+### Step 2 — Attach Neon [dashboard]
+
+1. Vercel project → **Storage** → **Create Database** → **Neon**.
+2. Plan **Free**, region **AWS US East 1** (see §1), name `openings`.
+3. Connect it to the project for the **Production** environment. (Preview is
+   covered in §11 — leave it off.)
+
+The integration adds `DATABASE_URL` (the **pooled** connection string — its
+host contains `-pooler`), `DATABASE_URL_UNPOOLED` (the direct one) and a set of
+`PG*` / `POSTGRES_*` variables to the project. The application reads only
+`DATABASE_URL`; the unpooled one is for migrations in Step 5.
+
+**`btree_gist` needs no dashboard action.** Migration `0000` creates it and
+Neon's default role is allowed to. Step 5 proves it is there rather than
+assuming so.
+
+> **Already have a Neon account?** Creating a separate Neon project in the Neon
+> console and pasting its pooled connection string into `DATABASE_URL` yourself
+> works identically. What does **not** work is reusing the development
+> database: the seed tears down and rebuilds the demo businesses, and the test
+> database is truncated by the suite.
+
+### Step 3 — Set every environment variable [dashboard]
+
+Vercel project → **Settings → Environment Variables**. Scope every one to
+**Production**. Tick **Sensitive** on everything except the two `NEXT_PUBLIC_*`
+values and `EMAIL_FROM`.
+
+| Variable | Value | Where it comes from |
+| --- | --- | --- |
+| `DATABASE_URL` | pooled Neon string | **Already set** by the Neon integration in Step 2. |
+| `BETTER_AUTH_SECRET` | 32+ random bytes | Generate a **fresh** one — never the development value: `openssl rand -base64 32`. Rotating it later signs every owner out **and invalidates every manage link already emailed** (they are derived from it). |
+| `BETTER_AUTH_URL` | `PRODUCTION_URL` | The URL from Step 1. Better Auth issues its callbacks against it and trusts requests only from it. |
+| `NEXT_PUBLIC_APP_URL` | `PRODUCTION_URL` | Same value. Every link in every email, Stripe's return URLs and the QStash delivery target are built from it. It is **inlined at build time**, so changing it needs a redeploy, not just a save. |
+| `CRON_SECRET` | random | `openssl rand -hex 32`. Vercel sends it to the cron as `Authorization: Bearer …` on its own; without it the sweep refuses to run in production. |
+| `STRIPE_SECRET_KEY` | `sk_test_…` | Stripe Dashboard, **Test mode on** → Developers → API keys → Secret key. The app refuses a live key. |
+| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | `pk_test_…` | Same page → Publishable key. |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` | **Leave until Step 6** — it is issued when the webhook endpoint is created. |
+| `RESEND_API_KEY` | `re_…` | Resend → API Keys → Create API key, permission **Sending access**. |
+| `EMAIL_FROM` | `Openings <onboarding@resend.dev>` | Resend's shared testing sender, until you verify a domain — see Step 7 for what that limits. Then `Your Name <bookings@your-domain>`. |
+| `QSTASH_URL` | region origin | Upstash console → QStash → **Quickstart**. `https://qstash.upstash.io` for the EU region, `https://qstash-us-east-1.upstash.io` for US. **An account in the US region must set this**, or every publish goes to the EU endpoint and is refused. |
+| `QSTASH_TOKEN` | token | Same Quickstart panel. |
+| `QSTASH_CURRENT_SIGNING_KEY` | `sig_…` | Same panel. Verifies that a delivery really came from QStash. |
+| `QSTASH_NEXT_SIGNING_KEY` | `sig_…` | Same panel. Used during key rotation; both are required. |
+| `DEMO_OWNER_EMAIL` | an inbox you read | Your choice. The seed creates the salon owner with it (the clinic owner is the same address with `+clinic`), and `/demo` signs visitors in as that owner. |
+| `DEMO_OWNER_PASSWORD` | 10+ characters | Your choice. Must match what the seed is given in Step 5. |
+
+**Not** set in Vercel: `TEST_DATABASE_URL` and the `E2E_*` variables (tests
+only), and `NODE_ENV` (Vercel sets it).
+
+### Step 4 — Fluid Compute, region and the cron [dashboard + repo]
+
+**Fluid Compute is required.** The owner's live agenda is a Server-Sent Events
+stream held open for up to five minutes, and the route declares
+`maxDuration = 300` to claim it. On Hobby, 300 seconds is the ceiling *with*
+Fluid Compute; without it the ceiling is 60 seconds.
+
+- `vercel.json` sets `"fluid": true`, so every deployment of this repository
+  gets it whatever the dashboard says.
+- Confirm anyway: Settings → **Functions** → **Fluid Compute: Enabled**. (It
+  has been the default for new projects since April 2025.)
+- Same page → **Function Region** → Washington, D.C., USA (`iad1`) — or
+  whichever region you matched Neon to in §1.
+
+The stream retires itself after 280 seconds and the browser reconnects at
+once, so the platform's 300-second limit is a backstop a healthy connection
+never reaches (`STREAM_MAX_LIFETIME_MS` in `src/lib/admin/calendar.ts`).
+
+**The cron is already declared** in `vercel.json`:
+
+```json
+{ "path": "/api/cron/daily", "schedule": "0 3 * * *" }
 ```
 
-Use **two** databases, not one. `TEST_DATABASE_URL` must differ from
-`DATABASE_URL` — the concurrency suite `TRUNCATE`s tables and refuses to run if
-the two match. On Neon, a branch is the cheapest way to get a second one.
+It appears under Settings → **Cron Jobs** after the next production deploy,
+with a **Run** button for triggering it by hand. Read §4 for what Hobby does and
+does not promise about it — that section is why reminders do not depend on it.
 
----
+### Step 5 — Migrate, verify, seed [terminal]
 
-## 2. Environment
+Run from your machine, against the production database, **once**.
 
-Copy `.env.example` to `.env.local` (locally) or paste the values into the
-hosting provider's environment settings. `src/env.ts` validates the whole set
-on first read and fails with the complete list of what is wrong, so a
-misconfigured deploy dies at startup instead of at the first booking.
+Create `.env.production.local` in the repository root. It is covered by the
+`.env*` rule in `.gitignore` and is never committed.
 
-### Required in production
+```bash
+# .env.production.local — production values, for these three commands only.
+# The DIRECT connection (DATABASE_URL_UNPOOLED in Vercel), not the pooled one:
+# migrations are DDL inside a transaction, which belongs on a real session.
+DATABASE_URL='postgresql://…@ep-….us-east-1.aws.neon.tech/neondb?sslmode=require'
+# The same value as in Vercel. The seed derives the demo appointments' manage
+# links from it; a different secret seeds links that production cannot open.
+BETTER_AUTH_SECRET='…'
+DEMO_OWNER_EMAIL='…'
+DEMO_OWNER_PASSWORD='…'
+```
 
-| Variable | Notes |
-| --- | --- |
-| `DATABASE_URL` | Pooled connection string. |
-| `BETTER_AUTH_SECRET` | `openssl rand -base64 32`. **Rotating it signs every owner out AND invalidates every manage link already sent** — the links are derived from it. See `src/lib/notifications/manage-link.ts`. |
-| `BETTER_AUTH_URL` | The deployed origin. |
-| `NEXT_PUBLIC_APP_URL` | The deployed origin. Used for email links and Stripe redirects. |
-| `CRON_SECRET` | The daily sweep refuses to run without it when `NODE_ENV=production`. An open sweep is an open "send every queued email now" button. |
+Then, in Git Bash (or any POSIX shell), from the repository root:
 
-### Optional, and what each one degrades to
+```bash
+set -a && . ./.env.production.local && set +a && npm run db:migrate && npm run db:verify && npm run db:seed
+```
 
-| Variable | Absent means |
-| --- | --- |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | No card step. A service with a deposit keeps its hold and tells the customer to arrange payment with the business; a service without one books normally. |
-| `RESEND_API_KEY` | **Mail is not delivered.** In development the message is printed in full. In production only the envelope is logged — see §6. |
-| `QSTASH_TOKEN` + the two signing keys | No per-booking reminders. Anything due is sent inline on confirmation; the rest waits for the daily sweep, so a reminder can be up to a day late but is never lost. |
+Values exported this way win over `.env.local` — every script loads that file
+without overriding what is already set — so all three commands hit
+production. **Close that terminal afterwards**; it is still pointed at
+production.
 
-The app **refuses a live Stripe key.** `assertTestMode` throws the first time a
-Stripe client is constructed — so the failure lands on the first request that
-would have touched Stripe, not silently on a customer's card. This is test mode
-only and there is no configuration that turns that off.
+`db:verify` is the assertion that the database can refuse a double booking. It
+reads the catalogue — not the migration table — and **exits non-zero naming
+what is missing** if `btree_gist` is not installed, if
+`appointments_no_overlap` does not exist, is not an exclusion constraint, is not
+validated, or has the wrong shape, or if any migration is unapplied. A healthy
+run looks like this:
 
----
+```
+  Checking database "neondb"
 
-## 3. Vercel
+  ✓ btree_gist 1.8 is installed
+  ✓ appointments_no_overlap: EXCLUDE USING gist (staff_id WITH =, slot WITH &&) WHERE ((status = ANY (ARRAY['held'::appointment_status, 'confirmed'::appointment_status])))
+  ✓ 14 of 14 migrations applied
 
-- Fluid Compute **on**.
-- `vercel.json` already declares the one daily cron (`/api/cron/daily` at
-  03:00). Vercel sends `Authorization: Bearer $CRON_SECRET` automatically, so
-  nothing has to be configured twice.
-- Set every variable from §2 for the Production environment.
+  The database will refuse an overlapping booking.
+```
 
-Security headers are set in `next.config.ts`, not in `vercel.json`, so they
-apply to `next start` and to local development too. A header that only exists
-in production is a header nobody tests.
+CI runs the same script against a database migrated from nothing on every
+push, so the script itself is known to work.
 
----
+The seed builds two businesses in two timezones — **Rosa's Hair Studio** in
+`Europe/Lisbon` (`/book/rosas-hair-studio`) and **Northside Family Clinic** in
+`America/Chicago` (`/book/northside-family-clinic`) — with staff, weekly hours,
+time off and a fortnight of appointments either side of today. Re-running it
+re-anchors the demo to the new today.
 
-## 4. Stripe
+### Step 6 — Stripe webhook, in test mode [dashboard]
 
-1. Create a webhook endpoint at `https://<your-domain>/api/webhooks/stripe`.
-2. Subscribe to exactly three events:
+1. Stripe Dashboard → make sure **Test mode** is on (the toggle, or the
+   test-mode sandbox you use).
+2. **Developers → Webhooks → Add destination** (Stripe also calls these *event
+   destinations*).
+3. Events from **Your account**. If it asks for an API version, choose
+   **`2026-08-26.dahlia`** — the version the application pins
+   (`STRIPE_API_VERSION` in `src/lib/payments/stripe.ts`).
+4. Select exactly three events:
    - `checkout.session.completed`
    - `checkout.session.expired`
    - `charge.refunded`
-3. Copy the signing secret into `STRIPE_WEBHOOK_SECRET`.
+5. Destination type **Webhook endpoint**, URL
+   **`PRODUCTION_URL/api/webhooks/stripe`**. Create it.
+6. On the endpoint's page, **Reveal** the signing secret (`whsec_…`) and paste
+   it into Vercel as `STRIPE_WEBHOOK_SECRET`.
+
+This secret is **not** the one `stripe listen` prints locally; every endpoint
+has its own. A mismatch makes every event fail signature verification, and the
+booking stays "confirming" forever — the endpoint's page in Stripe shows the
+400s.
 
 **The success redirect is not proof of payment.** An appointment becomes
-`confirmed` only inside the verified webhook. If you are testing and a booking
-stays "confirming", the webhook is not arriving — check the endpoint, not the
-application.
+`confirmed` only inside the verified webhook.
 
-### If the Stripe account is shared
-
-A test-mode account belongs to a developer, not to a project, so another app's
-events may arrive at this endpoint perfectly signed. Every object this
+The Stripe account may be shared with another project. Every object this
 application creates carries `metadata.app=openings` and the handler ignores
-anything without it. `stripe listen` forwards *every* event on the account, so
-narrow it locally:
+anything without it, so another app's events arriving here are harmless. For
+local work, narrow `stripe listen` the same way:
 
 ```bash
 stripe listen --forward-to localhost:3000/api/webhooks/stripe --events checkout.session.completed,checkout.session.expired,charge.refunded
 ```
+
+### Step 7 — Resend [dashboard]
+
+There is **no URL to configure in Resend.** "Pointing it at production" is two
+variables in Vercel: `RESEND_API_KEY` and `EMAIL_FROM`. Every link inside every
+message — the manage link, the calendar download, the Google Calendar button —
+is built from `NEXT_PUBLIC_APP_URL`, which is why Step 3 sets it to the
+production URL. (Resend's own webhooks are not used.)
+
+What changes is **which sender you use**, and it matters more than it looks:
+
+| | Shared testing domain | Your verified domain |
+| --- | --- | --- |
+| `EMAIL_FROM` | `Openings <onboarding@resend.dev>` | `Name <bookings@your-domain>` |
+| Setup | None | Three DNS records — §5 |
+| **Who can receive** | **Only the address that owns the Resend account.** Anything else is refused with a 403 ("you can only send testing emails to your own email address"). | Anybody. |
+| Deliverability | Shared and rate-limited; fine for a demo, not for customers | Authenticated with SPF, DKIM and DMARC as your own domain |
+
+So on the testing domain, **book with the Resend account's own email address**
+during the smoke test, or no confirmation will arrive. The seeded businesses'
+"new booking" notices go to their contact addresses, which Resend will refuse;
+those outbox rows are marked failed and retried with backoff. That is expected
+noise, not a fault, and it disappears with a verified domain.
+
+### Step 8 — QStash [dashboard]
+
+1. <https://console.upstash.com/qstash> → **Quickstart** (or the environment
+   tab). Copy `QSTASH_URL`, `QSTASH_TOKEN`, `QSTASH_CURRENT_SIGNING_KEY` and
+   `QSTASH_NEXT_SIGNING_KEY` into Vercel (Step 3).
+2. **The schedule target needs no console configuration.** At the moment a
+   booking is confirmed, the application publishes one QStash message per
+   reminder, for its exact minute, to
+   **`PRODUCTION_URL/api/notifications/deliver`** — derived from
+   `NEXT_PUBLIC_APP_URL`. The delivery route verifies QStash's signature
+   against that same URL, so `NEXT_PUBLIC_APP_URL` being exactly the production
+   origin is what makes deliveries both reach the worker and be accepted.
+3. With `NEXT_PUBLIC_APP_URL` on `localhost`, scheduling is switched off on
+   purpose — QStash cannot reach a laptop, and messages would pile up in its
+   dead-letter queue. Production does not have that problem.
+
+After the redeploy, **Admin → Settings** states which delivery mode is running:
+"Scheduled per booking" or "Daily catch-up only". If it says the catch-up, a
+variable is missing or `NEXT_PUBLIC_APP_URL` is not the production URL.
+
+**Optional:** in the QStash console, create a **Schedule** that POSTs to
+`PRODUCTION_URL/api/cron/daily` every hour (`0 * * * *`). The daily route
+accepts a QStash-signed call as well as Vercel's bearer, so this turns the
+safety net's worst case from "a day late" into "an hour late" for 24 messages a
+day, well inside the free tier.
+
+### Step 9 — Redeploy, then run the scripted smoke check [dashboard + terminal]
+
+Environment variables apply only to deployments made **after** they are saved,
+and `NEXT_PUBLIC_*` values are compiled in. So:
+
+1. Vercel project → **Deployments** → the latest → **⋯ → Redeploy**.
+2. When it is live:
+
+```bash
+npm run smoke -- https://openings.vercel.app
+```
+
+(with your actual `PRODUCTION_URL`). It proves, without changing anything:
+the security headers are on the response and the CSP allows Stripe; both demo
+businesses render, each carrying **its own** timezone; an invented manage link
+names no business and is `noindex`; the cron, the Stripe webhook, the reminder
+worker and the agenda stream all refuse a stranger — and it tells a *missing*
+`CRON_SECRET` or `STRIPE_WEBHOOK_SECRET` apart from a wrong caller. It exits
+non-zero on any failure.
+
+---
+
+## 3. The live smoke test
+
+The part that needs a person, in this order. Each step says what proves it
+and, if it fails, where to look first.
+
+Use two browsers (or one normal window and one private window) and a phone.
+On the Resend testing domain, use **the Resend account's own address** as the
+customer email.
+
+1. **The business page loads.** Open `PRODUCTION_URL/book/rosas-hair-studio`.
+   The name, address, opening hours and services render.
+   *If not:* Vercel → Deployments → the deployment → **Logs**. A database error
+   means `DATABASE_URL`; an environment error names the variable.
+2. **Pick a service, a staff member and a date.** The month picker shows
+   days with availability as selectable and the rest as not.
+3. **The Ribbon shows a believable day.** Open times inside the salon's
+   hours, booked appointments carved in with initials, lunch or time off
+   hatched, nothing before now. The header says times are in `Europe/Lisbon`
+   and, if you are elsewhere, how far that is from you.
+4. **Select a time and watch the hold start.** The segment turns solid, the
+   depleting bar appears along its top edge, and the sticky summary counts down
+   from 8:00.
+5. **Open the same day in the second browser.** The time you are holding is
+   **not** offered there — it is hatched as held by someone else. This is the
+   exclusion constraint working across two sessions.
+6. **Fill in details** — the Resend account's email — tick the policy and
+   continue. (Wait a few seconds on the form first: a submit within three
+   seconds of taking the slot is refused as a bot.)
+7. **Pay with `4242 4242 4242 4242`**, any future expiry, any CVC, any
+   postcode. Stripe Checkout loads — which also proves the CSP allows it.
+8. **Land on confirmed.** The return page may say it is confirming for a
+   second or two, then "You are booked in".
+   *If it stays confirming:* the webhook is not arriving. Stripe → Developers →
+   Webhooks → the endpoint → its recent deliveries show the status code.
+9. **The confirmation email arrives with a calendar invite.** Check the
+   footer names the business and says why the message arrived. The `.ics`
+   attachment is `PRODID:-//Openings//Booking//EN`.
+10. **Add it to a real calendar** — open the attachment, or use the Google
+    Calendar link in the email. It lands at the right time in your own
+    timezone.
+11. **Reschedule from the manage link** in the email. Pick a new time and
+    confirm. A reschedule email arrives with an updated invite carrying the
+    same `UID` and a higher `SEQUENCE` — open it and the calendar entry
+    **moves** rather than duplicating.
+12. **Cancel from the manage link.** Then refresh the day in the second
+    browser: the slot is **open again immediately** — not after a cron, not
+    after the hold would have expired. A cancellation email arrives and, where
+    the calendar honours `METHOD:CANCEL`, the entry is removed.
+13. **Sign in as the owner** — `PRODUCTION_URL/demo`, or `/sign-in` with
+    `DEMO_OWNER_EMAIL` / `DEMO_OWNER_PASSWORD`. The agenda for today shows the
+    booking you made, then cancelled, and scrolls to now.
+14. **Book publicly again with the agenda open** in the other browser. The
+    new appointment appears on the agenda **without a refresh**, within a few
+    seconds. That is the SSE stream, and Fluid Compute is what keeps it alive.
+15. **Check the other business shows its own timezone.** Open
+    `PRODUCTION_URL/book/northside-family-clinic`: its times are in
+    `America/Chicago`, six hours from Lisbon, and its hours read as Chicago's
+    local hours, not shifted by the server's zone.
+16. **Test on a phone.** The booking flow is one column, time targets are
+    comfortably tappable, the sticky summary never covers the button, and the
+    countdown is readable.
+
+When all sixteen pass, it is deployed.
+
+---
+
+## 4. Why reminders go through QStash: the Hobby cron constraints
+
+The daily cron in `vercel.json` is a **safety net, not the reminder
+mechanism**, and the reason is what Vercel Hobby promises about crons:
+
+- **Once per day, at most.** A Hobby project's cron expressions may not fire
+  more than daily; anything more frequent fails the deployment.
+- **Anywhere within the hour.** A job declared for `0 3 * * *` fires at some
+  point between 03:00 and 03:59. The minute is not guaranteed.
+- **UTC only.** The schedule is evaluated in UTC — there is no timezone
+  setting — so 03:00 is 04:00 in Lisbon in summer and 22:00 the previous day in
+  Chicago.
+- **Production deployments only.** Preview deployments never run crons.
+
+"Remind the customer 24 hours before their appointment" needs a resolution of
+minutes, in the business's timezone. A job with a resolution of a day, in UTC,
+with an hour of jitter, can only send such a reminder hours early or after the
+appointment has happened. So each reminder is published to **QStash** at booking
+time for its exact instant (Step 8), and the daily cron catches whatever QStash
+did not deliver: a failed publish, an expired token, a paused queue. It also
+reclaims expired holds and prunes old rate-limit and webhook-event rows.
+Correctness never depends on it running.
+
+Without QStash configured, the product still works: reminders fall to the
+daily sweep and arrive up to a day late, never lost. Admin → Settings says
+which mode is running.
 
 ---
 
@@ -108,11 +419,12 @@ stripe listen --forward-to localhost:3000/api/webhooks/stripe --events checkout.
 **Transactional mail from an unauthenticated domain goes to spam, and a booking
 confirmation in a spam folder is a customer who does not turn up.** This is the
 step most likely to be skipped and the one whose failure is least visible.
+Needed as soon as you move off the shared testing domain (Step 7).
 
 ### Verify the sending domain in Resend
 
-Resend → Domains → Add Domain. It issues three DNS records. Add all three at
-the registrar, then wait for Resend to show the domain as **Verified**.
+Resend → Domains → Add Domain. It issues DNS records. Add them at the
+registrar, then wait for Resend to show the domain as **Verified**.
 
 | Record | Type | Why |
 | --- | --- | --- |
@@ -136,9 +448,7 @@ Once reports show your own mail passing, tighten to `p=quarantine` and then
 EMAIL_FROM="Rosa's Hair Studio <bookings@yourdomain.com>"
 ```
 
-It must be **on the verified domain**. The default
-`onboarding@resend.dev` works for testing and is rate-limited and shared — it is
-not for production.
+It must be **on the verified domain**. Redeploy after changing it.
 
 ### Checking it actually works
 
@@ -270,7 +580,8 @@ does not own.
 
 The policy in `next.config.ts` allows Stripe's domains
 (`js.stripe.com`, `hooks.stripe.com`, `checkout.stripe.com`, `api.stripe.com`)
-so the payment step is not broken by it.
+so the payment step is not broken by it. `npm run smoke` asserts they are on
+the live response, and step 7 of §3 proves Checkout loads under it.
 
 `script-src` includes `'unsafe-inline'`, and the reason is stated honestly in
 the config: React streams a page by writing inline `$RC(...)` calls into the
@@ -284,6 +595,10 @@ anywhere in the codebase.
 `Strict-Transport-Security` is sent **only** in production. Sending it in
 development would pin `localhost` to https in the browser's HSTS store for two
 years and break every other project on that machine.
+
+Security headers are set in `next.config.ts`, not in `vercel.json`, so they
+apply to `next start` and to local development too. A header that only exists
+in production is a header nobody tests.
 
 ---
 
@@ -300,6 +615,7 @@ reasoning next to it.
 | **Create** a hold on one business's one day | IP + business + date | 4 per 8 min |
 | Submit details | IP | 12 per 10 min |
 | Submit details | email | 6 per hour |
+| Submit details sooner than 3 s after taking the slot | — | refused as automated |
 | Start checkout | IP | 20 per 10 min |
 | Manage page and its actions | IP / token | 120 / 60 per 5 min |
 
@@ -333,6 +649,24 @@ running — a stale row is reset in place by the next request from that subject.
 
 Stated plainly rather than discovered later.
 
+- **Preview deployments are not set up.** A preview has its own URL, which
+  does not match `BETTER_AUTH_URL`, so owner sign-in fails there; crons never
+  run on previews; and pointing a preview at the production database would let
+  unreviewed code write to it. Production only, deliberately. Making previews
+  work means a Neon branch per preview and per-environment URLs.
+- **The first request after a quiet spell is slow.** Neon Free scales its
+  compute to zero when idle and takes a moment to wake — normally a second or
+  two when the function and the database share a region. The connection pool
+  waits up to ten seconds (`src/db/client.ts`), so it is a slow first page, not
+  an error. Across an ocean, waking plus the TLS handshake can exceed that and
+  the first page errors; that is one more reason for §1's advice on regions.
+- **The agenda stream reconnects every 280 seconds.** Invisible to the owner —
+  the client reconnects at once and re-reads the day — but it is one reconnect
+  every few minutes per open agenda, by design (§2, Step 4).
+- **Changing the production URL needs three updates and a redeploy:**
+  `BETTER_AUTH_URL`, `NEXT_PUBLIC_APP_URL`, and the Stripe webhook endpoint.
+  Reminders already queued in QStash keep the old URL; they still arrive while
+  the old `vercel.app` domain stays assigned to the project.
 - **One `npm audit` finding is unfixable and is accepted.**
   `drizzle-kit` → `@esbuild-kit/esm-loader` → `esbuild@0.18.20`
   (GHSA-67mh-4wv8-2f99, moderate). The advisory is about esbuild's *dev
@@ -351,8 +685,6 @@ Stated plainly rather than discovered later.
   forged all produce the same page, naming no business. A different answer for
   a real-but-old token is an oracle, and an expired manage URL outlives the
   appointment in inboxes and screenshots.
-- **There is no settings form for business details yet.** Timezone, slug and
-  currency are fixed after onboarding, enforced by a database trigger.
 - **A dead manage link is not constant-TIME.** Resolving a token that names a
   real-but-expired appointment does slightly more work than one that matches
   nothing, so the two are distinguishable by latency in principle. Exploiting
@@ -360,27 +692,19 @@ Stated plainly rather than discovered later.
   256-bit keyspace, with the IP limiter capping attempts — so the response
   bodies were made identical and the timing was left alone rather than padded
   with a delay that would be theatre.
+- **There is no settings form for business details yet.** Timezone, slug and
+  currency are fixed after onboarding, enforced by a database trigger.
 - **The suite cannot be run twice at once.** Every integration file
   `TRUNCATE`s the shared tables, so two concurrent `npm test` processes destroy
   each other's fixtures and produce failures that look real. Run one.
+- **The browser suite needs a nearby database.** Its steps give a page five
+  seconds to appear. Against a database hundreds of milliseconds away, the
+  deposit path's details page can take longer than that and the card spec
+  fails on timing alone; CI runs it against a local container and is not
+  affected.
 
----
-
-## 12. Before you call it deployed
+Before any deploy, locally:
 
 ```bash
 npm run typecheck && npm run lint && npm test && npm run build
 ```
-
-Then, against the deployed URL:
-
-- [ ] Book something end to end with Stripe's test card `4242 4242 4242 4242`.
-- [ ] Confirm the appointment flips to `confirmed` — that proves the webhook.
-- [ ] Confirm the email arrives, and check `spf=pass dkim=pass dmarc=pass` in
-      its headers.
-- [ ] Open the calendar invite; the event should appear at the right time in
-      your own timezone.
-- [ ] Follow the manage link, reschedule, then cancel.
-- [ ] `curl -sI https://<domain> | grep -i "content-security-policy\|strict-transport"`.
-- [ ] Load `/manage/<something-invented>` and confirm it says nothing about any
-      business.

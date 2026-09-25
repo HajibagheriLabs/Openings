@@ -285,7 +285,12 @@ function buildScheduler(): Scheduler {
     );
   }
 
-  return new QStashScheduler(new Client({ token }), `${origin}${DELIVERY_PATH}`);
+  /* The region, passed explicitly rather than left for the SDK to find in
+     process.env, so the one place that decides where messages go is readable
+     here. Undefined falls back to the SDK default (the EU region). */
+  const client = new Client({ token, baseUrl: serverEnv.QSTASH_URL });
+
+  return new QStashScheduler(client, `${origin}${DELIVERY_PATH}`);
 }
 
 /** For tests, which install their own. */

@@ -54,6 +54,12 @@ const serverSchema = z.object({
 
   /** Upstash QStash publish token. Absent: per-booking reminders are not scheduled and the daily cron is the only safety net. */
   QSTASH_TOKEN: z.string().min(1).optional(),
+  /**
+   * The QStash region's API origin. Absent: the SDK's default, which is the EU
+   * region — so an account created in the US region MUST set it, or every
+   * publish goes to a region that does not know the token.
+   */
+  QSTASH_URL: z.url().optional(),
   QSTASH_CURRENT_SIGNING_KEY: z.string().min(1).optional(),
   QSTASH_NEXT_SIGNING_KEY: z.string().min(1).optional(),
 

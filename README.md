@@ -58,6 +58,8 @@ npm run dev
 | `npm run email`     | React Email preview on http://localhost:3001  |
 | `npm run db:migrate` | Apply migrations                             |
 | `npm run db:seed`   | Build the demo workspace                      |
+| `npm run db:verify` | Fail loudly unless `btree_gist` and the no-overlap constraint exist |
+| `npm run smoke -- <url>` | Scripted checks against a running deployment |
 
 ## Tests
 
@@ -202,6 +204,13 @@ browsers. No secret value ever did, and now neither does the schema.
 Security headers, including a CSP that allows Stripe's domains, are set in `next.config.ts` so they
 apply to `next start` and to `npm run dev` too. See [DEPLOY.md](DEPLOY.md) for SPF/DKIM setup, the
 data-erasure procedure, what is and is not logged, and the accepted `npm audit` finding.
+
+## Deploying
+
+[DEPLOY.md](DEPLOY.md) walks through Vercel Hobby + Neon Free in order: importing the repository,
+attaching the database, every environment variable and where its value comes from, Fluid Compute
+(the owner's live agenda is a long-lived stream), migrating and asserting the exclusion constraint
+exists in production, the Stripe webhook, Resend, QStash, and a sixteen-step live smoke test.
 
 ## Layout
 

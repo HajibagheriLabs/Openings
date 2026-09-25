@@ -166,8 +166,16 @@ export const STREAM_TICK_MS = 4_000;
  * it deliberately, with a `bye` the client understands, turns that into a
  * planned reconnect: the client comes straight back, the server-side query
  * starts fresh, and nothing in between looks like a failure.
+ *
+ * ═══ UNDER THE PLATFORM'S LIMIT, NOT EQUAL TO IT ═══
+ *
+ * Vercel Hobby with Fluid Compute caps a function at 300 seconds, and the route
+ * declares `maxDuration = 300` to claim all of it. This used to be exactly five
+ * minutes — the same number — which made the goodbye a race against the
+ * platform's kill that the goodbye would sometimes lose. Twenty seconds short
+ * leaves room for one tick and one keepalive to finish before the cut.
  */
-export const STREAM_MAX_LIFETIME_MS = 5 * 60_000;
+export const STREAM_MAX_LIFETIME_MS = 280_000;
 
 /** A comment frame often enough that no proxy decides the connection is dead. */
 export const STREAM_KEEPALIVE_MS = 20_000;
