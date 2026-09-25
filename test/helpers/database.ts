@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import type { Pool } from "pg";
 
 import { createDb, type Db } from "@/db/client";
+import { Temporal } from "@/lib/scheduling/temporal";
 import {
   businesses,
   customers,
@@ -168,11 +169,67 @@ export async function clearAppointments(db: Db): Promise<void> {
   await db.execute(sql`TRUNCATE TABLE appointments RESTART IDENTITY CASCADE`);
 }
 
-/** A fixed, DST-free reference day so times in tests read literally. */
+/**
+ * A fixed, DST-free reference day so times in tests read literally.
+ *
+ * FIXED MEANS IT AGES. Use it only where every clock the code under test reads
+ * is pinned by the test. Where the code reads the REAL clock — Postgres's
+ * `now()` stamping a hold, a confirmation deciding whether a reminder is still
+ * worth queueing — a fixed day eventually lands in the past and the test
+ * starts failing for no reason but the calendar. Those tests use
+ * `upcomingTuesday` below.
+ */
 export function at(hour: number, minute = 0): Date {
   return new Date(
     Date.UTC(2026, 8 /* September */, 15, hour, minute, 0, 0),
   );
+}
+
+/** The fixture business's zone (`setupTestDatabase`). */
+const FIXTURE_TIME_ZONE = "Europe/Berlin";
+
+/**
+ * A Tuesday that is always ahead of the real clock.
+ *
+ * The first Tuesday at least `minDaysAhead` days after today in Berlin — far
+ * enough out that a reminder due the day before is still in the future, near
+ * enough to sit inside any business's booking horizon.
+ *
+ * `at` takes BERLIN WALL-CLOCK hours, not UTC ones. The fixed day above is in
+ * summer time, so its tests could say "07:00Z is 09:00" and be right; a date
+ * that moves with the calendar is in winter time half the year, so the only
+ * hour that stays meaningful is the local one. A Tuesday is never a DST
+ * transition day in Europe (those are Sundays), so every hour exists once.
+ */
+export function upcomingTuesday(minDaysAhead = 7): {
+  /** `YYYY-MM-DD`, as the scheduling code takes a local date. */
+  date: string;
+  /** That day at `hour:minute` Berlin time, as an instant. */
+  at: (hour: number, minute?: number) => Date;
+  /** The same weekday `weeks` later, as `YYYY-MM-DD`. */
+  weeksLater: (weeks: number) => string;
+} {
+  let day = Temporal.Now.plainDateISO(FIXTURE_TIME_ZONE).add({
+    days: minDaysAhead,
+  });
+
+  while (day.dayOfWeek !== 2) {
+    day = day.add({ days: 1 });
+  }
+
+  return {
+    date: day.toString(),
+    at: (hour, minute = 0) =>
+      new Date(
+        day
+          .toZonedDateTime({
+            timeZone: FIXTURE_TIME_ZONE,
+            plainTime: new Temporal.PlainTime(hour, minute),
+          })
+          .toInstant().epochMilliseconds,
+      ),
+    weeksLater: (weeks) => day.add({ weeks }).toString(),
+  };
 }
 
 /**

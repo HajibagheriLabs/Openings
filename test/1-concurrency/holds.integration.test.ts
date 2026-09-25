@@ -342,8 +342,14 @@ describe("the day as the holder sees it", () => {
     const before = await dayView();
     expect(before!.starts.has(at(7))).toBe(false);
 
+    /* A minute before the INJECTED clock, like `keepAlive` above — not
+       Postgres's `now()`. The day is judged as of NOW, so a deadline taken
+       from the wall clock is only "past" while the wall clock is behind the
+       fixed day; once the calendar overtook it, this deadline read as the
+       future and the test failed on the date alone. */
     await db.execute(sql`
-      UPDATE appointments SET hold_expires_at = now() - interval '1 minute'
+      UPDATE appointments
+         SET hold_expires_at = ${new Date(NOW.getTime() - 60_000)}
        WHERE id = ${held.appointment.id}
     `);
 

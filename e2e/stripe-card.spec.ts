@@ -18,6 +18,7 @@ import {
   continueToDetails,
   fillDetails,
   takeFirstOpenSlot,
+  waitOutTimeOnForm,
 } from "./fixtures/journey";
 
 /**
@@ -219,6 +220,7 @@ test("a deposit is charged and the webhook confirms the booking", async ({
 
   await fillDetails(page, { name: "Sam Taylor", email });
   await acceptPolicy(page);
+  await waitOutTimeOnForm(page);
 
   /* 20% of €100. The button says the amount, because nobody should press a
      pay button that does not name what it is about to take. */

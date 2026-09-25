@@ -30,12 +30,24 @@ import {
 } from "@/lib/scheduling/booking";
 
 import {
-  at,
   expireHold,
   requireTestDatabaseUrl,
   setupTestDatabase,
+  upcomingTuesday,
   type TestContext,
 } from "../helpers/database";
+
+/**
+ * THE APPOINTMENT DAY MOVES WITH TODAY.
+ *
+ * Confirmation reads the real clock: it queues a reminder only while the
+ * reminder's moment is still ahead, and the slot-lost apology searches for the
+ * nearest openings after NOW. A fixed day turns both into tests of the past —
+ * no reminder, and a search across a whole booking horizon for alternatives —
+ * and they failed exactly that way once the fixed day went by. Hours are
+ * Berlin wall-clock.
+ */
+const at = upcomingTuesday().at;
 
 /**
  * The webhook, end to end, against a real database and a mocked Stripe.
@@ -169,7 +181,7 @@ async function openTuesdays() {
 
   await db.insert(availabilityRules).values({
     staffId: ctx.staffA,
-    /** 2 = Tuesday, matching Postgres `extract(dow)`. 2026-09-15 is one. */
+    /** 2 = Tuesday, matching Postgres `extract(dow)` and `upcomingTuesday`. */
     weekday: 2,
     startLocal: "09:00",
     endLocal: "17:00",
@@ -178,7 +190,7 @@ async function openTuesdays() {
 }
 
 /** A hold that has reached a payment page: a customer, and a session id. */
-async function holdInCheckout(startsAt = at(10)) {
+async function holdInCheckout(startsAt = at(12)) {
   const held = await createHold(db, {
     businessId: ctx.businessId,
     staffId: ctx.staffA,
@@ -623,14 +635,14 @@ describe("the payment landed after the slot had gone", () => {
        payment page becomes a cancellation; an ordinary one is deleted, because
        it never became anything and a cancelled row would only clutter the
        agenda. Neither blocks the slot. */
-    const inCheckout = await holdInCheckout(at(10));
+    const inCheckout = await holdInCheckout(at(12));
 
     const plain = await createHold(db, {
       businessId: ctx.businessId,
       staffId: ctx.staffB,
       serviceId: ctx.plainServiceId,
       customerId: ctx.customerId,
-      startsAt: at(10),
+      startsAt: at(12),
     });
 
     await expireHold(db, inCheckout.id);
@@ -647,7 +659,7 @@ describe("the payment landed after the slot had gone", () => {
       staffId: ctx.staffA,
       serviceId: ctx.plainServiceId,
       customerId: ctx.customerId,
-      startsAt: at(10),
+      startsAt: at(12),
     });
 
     expect(rebooked.appointment.id).toBeTruthy();
@@ -683,7 +695,7 @@ describe("checkout.session.expired", () => {
       staffId: ctx.staffA,
       serviceId: ctx.plainServiceId,
       customerId: ctx.customerId,
-      startsAt: at(10),
+      startsAt: at(12),
     });
 
     expect(rebooked.appointment.id).toBeTruthy();

@@ -15,7 +15,11 @@ import {
   MIN_SECONDS_ON_FORM,
   rateLimitKey,
 } from "@/server/booking/rate-limit";
-import { setupTestDatabase, type TestContext } from "../helpers/database";
+import {
+  setupTestDatabase,
+  upcomingTuesday,
+  type TestContext,
+} from "../helpers/database";
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════
@@ -42,8 +46,8 @@ import { setupTestDatabase, type TestContext } from "../helpers/database";
  * property that actually matters: after one address has spent its whole
  * allowance, the day still has times a different customer can book.
  *
- * The fixture business is Europe/Berlin. 15 September 2026 is a Tuesday, clear
- * of any DST transition.
+ * The fixture business is Europe/Berlin, and the day under attack is a Tuesday
+ * at least a week ahead of today — see below for why it cannot be a fixed date.
  */
 
 let context: TestContext;
@@ -51,23 +55,25 @@ let db: Db;
 
 const TUESDAY = 2;
 const TIME_ZONE = "Europe/Berlin";
-const DATE = "2026-09-15";
 /**
- * ═══ THE DAY IS FIXED; THE CLOCK IS NOT ═══
+ * ═══ NEITHER THE DAY NOR THE CLOCK CAN BE PINNED ═══
  *
  * `createHold` stamps `hold_expires_at = now() + 8 minutes` from POSTGRES's
  * clock, and availability treats a hold as blocking only while that deadline
- * is still ahead. Evaluating the day "as of" some pinned 2026 instant would
- * therefore find every hold long lapsed and report a completely free day —
- * the test would pass while proving nothing.
+ * is still ahead. Evaluating the day "as of" some pinned instant would find
+ * every hold long lapsed and report a completely free day — the test would
+ * pass while proving nothing. So `dayView` runs against the real clock.
  *
- * So DATE above is a fixed future Tuesday, and `dayView` runs against the real
- * clock, which is the only way a live hold looks live.
+ * And a real clock needs a day that stays in its future. This file used to
+ * name a fixed "future" Tuesday; the calendar caught up with it, the day went
+ * into the past, and it had no bookable slots left to attack. The day now
+ * moves with today.
  */
+const DAY = upcomingTuesday();
+const DATE = DAY.date;
 
-/** 09:00 local is 07:00Z; the plain service is 60 minutes with no buffers. */
-const at = (hourUtc: number, minute = 0) =>
-  new Date(Date.UTC(2026, 8, 15, hourUtc, minute));
+/** Berlin wall-clock hours; the plain service is 60 minutes with no buffers. */
+const at = DAY.at;
 
 /** A different address on every test, so windows never bleed between them. */
 let addressCounter = 0;
@@ -168,7 +174,7 @@ describe("holding a day hostage", () => {
         break;
       }
 
-      await hold(at(7 + attempt));
+      await hold(at(9 + attempt));
       taken += 1;
     }
 
@@ -233,7 +239,7 @@ describe("holding a day hostage", () => {
 
     const otherDay = rateLimitKey(
       "hold:create:day",
-      `${attacker}|${context.businessId}|2026-09-22`,
+      `${attacker}|${context.businessId}|${DAY.weeksLater(1)}`,
     );
 
     expect(
@@ -355,7 +361,7 @@ describe("the minimum time on form", () => {
      * nothing here for a script to set. A hidden "rendered at" field would
      * have been trivially forgeable, which is why there is not one.
      */
-    const held = await hold(at(7));
+    const held = await hold(at(9));
     const createdAt = held.appointment.createdAt;
 
     expect(createdAt).toBeInstanceOf(Date);

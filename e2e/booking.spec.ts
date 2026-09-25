@@ -15,6 +15,7 @@ import {
   continueToDetails,
   fillDetails,
   takeFirstOpenSlot,
+  waitOutTimeOnForm,
 } from "./fixtures/journey";
 
 /**
@@ -89,6 +90,7 @@ test("a customer books a slot, and it is gone for everybody else", async ({
   });
 
   await acceptPolicy(page);
+  await waitOutTimeOnForm(page);
 
   /* No deposit on this service, so the booking is confirmed inside the same
      transaction that claims the hold. Nothing goes to Stripe. */

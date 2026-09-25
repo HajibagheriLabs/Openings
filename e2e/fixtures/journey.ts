@@ -25,6 +25,18 @@ import { expect, type Page } from "@playwright/test";
 /** How long a step gets to land, across all its retries. */
 const STEP_TIMEOUT = 30_000;
 
+/**
+ * MIN_SECONDS_ON_FORM in src/server/booking/rate-limit.ts, plus a margin.
+ *
+ * Copied rather than imported: that module is `server-only` and refuses to load
+ * here. If the server's threshold is ever raised past this, the journey fails
+ * at "You are booked in" with the busy message on screen — loudly, not quietly.
+ */
+const SECONDS_A_PERSON_TAKES = 3 + 1;
+
+/** When each page's hold appeared, for `waitOutTimeOnForm`. */
+const heldAt = new WeakMap<Page, number>();
+
 /** Click, then require the proof. Retried as one unit. */
 async function clickUntil(
   action: () => Promise<void>,
@@ -94,6 +106,10 @@ export async function takeFirstOpenSlot(page: Page): Promise<string> {
     () => expect(page.getByText("Held for you")).toBeVisible({ timeout: 5_000 }),
   );
 
+  /* Taken after the hold is on screen, so it is never earlier than the
+     `created_at` Postgres stamped — the wait below can only err long. */
+  heldAt.set(page, Date.now());
+
   return label;
 }
 
@@ -134,4 +150,30 @@ export async function acceptPolicy(page: Page): Promise<void> {
       name: /I have read how changing and cancelling works/,
     })
     .check();
+}
+
+/**
+ * Let the form have been open as long as a person's would have been.
+ *
+ * The details action refuses a submit that arrives within MIN_SECONDS_ON_FORM
+ * of the hold being written: that is its bot check, and a browser driven by
+ * this suite fills three fields and a checkbox in well under a second. The
+ * refusal is deliberately indistinguishable from "busy", so without this wait
+ * the journey dies at the confirmation heading with nothing pointing here.
+ *
+ * Only the remainder is waited — on a slow runner the form has usually been
+ * open long enough already.
+ */
+export async function waitOutTimeOnForm(page: Page): Promise<void> {
+  const since = heldAt.get(page);
+
+  if (since === undefined) {
+    throw new Error("waitOutTimeOnForm: no hold was taken on this page.");
+  }
+
+  const remaining = since + SECONDS_A_PERSON_TAKES * 1000 - Date.now();
+
+  if (remaining > 0) {
+    await page.waitForTimeout(remaining);
+  }
 }

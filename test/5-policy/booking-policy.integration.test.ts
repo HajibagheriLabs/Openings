@@ -11,7 +11,11 @@ import {
   checkRateLimit,
   findOverlappingConfirmed,
 } from "@/server/booking/policy";
-import { setupTestDatabase, type TestContext } from "../helpers/database";
+import {
+  setupTestDatabase,
+  upcomingTuesday,
+  type TestContext,
+} from "../helpers/database";
 
 /**
  * The policy layer, and the free-consultation path.
@@ -314,7 +318,11 @@ describe("how much of the calendar one email may sit on", () => {
 
 describe("claiming a hold", () => {
   it("CONFIRMS THERE AND THEN WHEN NOTHING IS OWED", async () => {
-    const held = await hold(at(7));
+    /* A day ahead of the REAL clock, not the fixed one: confirming queues a
+       reminder only while its moment is still to come, and that decision
+       reads the clock on the wall. On the fixed day the reminder silently
+       stopped being queued once the date went by. */
+    const held = await hold(upcomingTuesday().at(9));
 
     const claimed = await claimHold(db, {
       appointmentId: held.appointment.id,
